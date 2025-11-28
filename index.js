@@ -9,7 +9,6 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 
-// Debugging helper: log all incoming requests with role header
 app.use((req, res, next) => {
   const role = req.headers["x-role"] || req.headers["role"] || "(none)";
   console.log(`[app] ${req.method} ${req.originalUrl} - x-role=${role}`);
@@ -23,13 +22,11 @@ app.get("/", (req, res) => {
 app.use("/aset", asetRouter);
 app.use("/user", userRouter);
 
-// Debug: Print registered routes (helps diagnose missing methods or mounts)
 function printRoutes(app) {
   try {
     const routes = [];
     app._router.stack.forEach((middleware) => {
       if (middleware.route) {
-        // routes registered directly on the app
         const methods = Object.keys(middleware.route.methods)
           .map((m) => m.toUpperCase())
           .join(",");
@@ -55,7 +52,6 @@ function printRoutes(app) {
 
 printRoutes(app);
 
-// Debug helper: print routes for asetRouter specifically for clarity
 function printRouterDetails(basePath, router) {
   try {
     const lines = [];
@@ -78,7 +74,6 @@ function printRouterDetails(basePath, router) {
 
 printRouterDetails("/aset", asetRouter);
 
-// Global error handlers to help diagnose issues in production/dev
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err?.stack ?? err);
   process.exit(1);

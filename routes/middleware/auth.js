@@ -1,5 +1,4 @@
 export function getRoleFromRequest(req) {
-  // Prefer explicit x-role or role headers, fall back to cookie 'role' if present
   const headerRaw = req.headers["x-role"] || req.headers["role"] || "";
   if (headerRaw && headerRaw.toString().trim() !== "") {
     return headerRaw.toString().trim().toLowerCase();

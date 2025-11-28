@@ -1,6 +1,6 @@
 import mysql from "mysql2";
 import dotenv from "dotenv";
-// Ensure env vars loaded when module is imported directly (safe no-op if already loaded)
+
 dotenv.config({ override: false });
 
 const db = mysql.createPool({

@@ -19,9 +19,7 @@ const loginHandler = (req, res) => {
     console.log(
       `login success: ${user.username ?? user.Username} (role=${user.role})`
     );
-    // Set a cookie with the user's role to persist auth between requests
     const role = (user.role ?? "").toString().trim().toLowerCase();
-    // Persist role and beban in cookies for 1 day so subsequent requests automatically authenticate
     const beban = (user.Beban ?? user.beban ?? "").toString().trim();
     res.cookie("role", role, { sameSite: "lax", maxAge: 24 * 60 * 60 * 1000 });
     if (beban !== "") {
@@ -41,13 +39,10 @@ const loginHandler = (req, res) => {
   });
 };
 
-// Accept login on both POST /user and POST /user/login for backward compatibility
 router.post("/login", loginHandler);
 router.post("/", loginHandler);
 
-// GET all users (omits sensitive fields) (admin only)
 router.get("/", requireAdmin, (req, res) => {
-  // Select typical public fields; avoid returning passwords
   const q = "SELECT username, role FROM user";
   db.query(q, (err, result) => {
     if (err) return res.status(500).json(err);
