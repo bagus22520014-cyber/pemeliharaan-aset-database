@@ -2,12 +2,19 @@ import dotenv from "dotenv";
 dotenv.config();
 import express from "express";
 import cookieParser from "cookie-parser";
+import fs from "fs";
+import path from "path";
 import asetRouter from "./routes/aset.js";
 import userRouter from "./routes/user.js";
+import perbaikanRouter from "./routes/perbaikan.js";
 
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
+// ensure assets/imgs dir exists and serve static
+const imgsDir = path.join(process.cwd(), "assets", "imgs");
+if (!fs.existsSync(imgsDir)) fs.mkdirSync(imgsDir, { recursive: true });
+app.use("/assets/imgs", express.static(imgsDir));
 
 app.use((req, res, next) => {
   const role = req.headers["x-role"] || req.headers["role"] || "(none)";
@@ -21,6 +28,7 @@ app.get("/", (req, res) => {
 
 app.use("/aset", asetRouter);
 app.use("/user", userRouter);
+app.use("/perbaikan", perbaikanRouter);
 
 function printRoutes(app) {
   try {
@@ -73,6 +81,7 @@ function printRouterDetails(basePath, router) {
 }
 
 printRouterDetails("/aset", asetRouter);
+printRouterDetails("/perbaikan", perbaikanRouter);
 
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err?.stack ?? err);

@@ -33,6 +33,7 @@ const loginHandler = (req, res) => {
       message: "Login berhasil",
       role,
       beban: beban || null,
+      // kekurangan removed - use Keterangan in user profile if needed
       username: user.username ?? user.Username ?? null,
       id: user.id ?? user.Id ?? null,
     });
