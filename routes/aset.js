@@ -2,7 +2,10 @@ import {
   requireAdmin,
   requireUserOrAdmin,
   getRoleFromRequest,
-  getBebanFromRequest,
+  getBebanListFromRequest,
+  getBebanPrefix,
+  isSameLocation,
+  buildBebanFilterSQL,
 } from "./middleware/auth.js";
 import express from "express";
 import db from "../db.js";
@@ -11,6 +14,80 @@ import path from "path";
 import fs from "fs";
 
 const router = express.Router();
+
+// Helper function to log riwayat
+function logRiwayat(
+  jenisAksi,
+  userId,
+  role,
+  asetId,
+  perubahan,
+  tabelRef = "aset",
+  recordId = null,
+  callback
+) {
+  const q = `INSERT INTO riwayat (jenis_aksi, user_id, role, aset_id, perubahan, tabel_ref, record_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  const perubahanJson = perubahan ? JSON.stringify(perubahan) : null;
+  db.query(
+    q,
+    [jenisAksi, userId, role, asetId, perubahanJson, tabelRef, recordId],
+    (err, result) => {
+      if (err) {
+        console.error("[riwayat] Error logging:", err);
+      } else {
+        console.log(
+          `[riwayat] Logged ${jenisAksi} for ${tabelRef} aset_id=${asetId} record_id=${recordId} by user_id=${userId}`
+        );
+      }
+      if (callback) callback(err, result);
+    }
+  );
+}
+
+// Helper function to create notification
+function createNotification(
+  userId,
+  beban,
+  tipe,
+  judul,
+  pesan,
+  link = null,
+  tabelRef = null,
+  recordId = null,
+  callback
+) {
+  const q = `INSERT INTO notification (user_id, beban, tipe, judul, pesan, link, tabel_ref, record_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+  db.query(
+    q,
+    [userId, beban, tipe, judul, pesan, link, tabelRef, recordId],
+    (err, result) => {
+      if (err) {
+        console.error("[notification] Error creating:", err);
+      } else {
+        console.log(
+          `[notification] Created ${tipe} notification for user_id=${userId} beban=${beban}`
+        );
+      }
+      if (callback) callback(err, result);
+    }
+  );
+}
+
+// Helper to get user_id from username
+function getUserIdFromUsername(username, callback) {
+  if (!username) return callback(new Error("Username not provided"));
+  db.query(
+    "SELECT id, role FROM user WHERE username = ?",
+    [username],
+    (err, rows) => {
+      if (err) return callback(err);
+      if (!rows || rows.length === 0)
+        return callback(new Error("User not found"));
+      callback(null, rows[0]);
+    }
+  );
+}
+
 // Multer setup for uploads
 const imgsDir = path.join(process.cwd(), "assets", "imgs");
 if (!fs.existsSync(imgsDir)) fs.mkdirSync(imgsDir, { recursive: true });
@@ -40,6 +117,15 @@ const upload = multer({
 // Map DB row to expected JSON format
 function mapRow(row) {
   if (!row) return row;
+
+  // Helper to format date to YYYY-MM-DD
+  const formatDate = (date) => {
+    if (!date) return null;
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString().split("T")[0];
+  };
+
   return {
     id: row.id ?? row.Id ?? null,
     AsetId: row.AsetId ?? row.asetId ?? null,
@@ -50,9 +136,12 @@ function mapRow(row) {
     Beban: row.Beban ?? null,
     AkunPerkiraan: row.AkunPerkiraan ?? row.Akun_Perkiraan ?? null,
     NilaiAset: row.NilaiAset ?? null,
-    TglPembelian: row.TglPembelian ?? null,
+    TglPembelian: formatDate(row.TglPembelian),
     MasaManfaat: row.MasaManfaat ?? null,
     StatusAset: row.StatusAset ?? row.Status ?? null,
+    Pengguna: row.Pengguna ?? null,
+    Lokasi: row.Lokasi ?? null,
+    Tempat: row.Tempat ?? null,
     // Prefer Keterangan; fallback to old Kekurangan column if present for compatibility
     Keterangan: row.Keterangan ?? row.Kekurangan ?? null,
     // Deprecated: Kekurangan column removed; use Keterangan instead
@@ -62,7 +151,7 @@ function mapRow(row) {
 
 router.use((req, res, next) => {
   const role = getRoleFromRequest(req) || "(none)";
-  const beban = getBebanFromRequest(req) || "(none)";
+  const beban = getBebanListFromRequest(req) || ["(none)"];
   console.log(
     `[aset] ${req.method} ${req.originalUrl} - role=${role} beban=${beban}`
   );
@@ -79,14 +168,15 @@ router.get("/", requireUserOrAdmin, (req, res) => {
     });
     return;
   }
-  const beban = getBebanFromRequest(req);
-  if (!beban || beban === "") {
+  const bebanList = getBebanListFromRequest(req);
+  if (!bebanList || bebanList.length === 0) {
     return res
       .status(403)
       .json({ message: "Akses ditolak: beban tidak ditemukan" });
   }
-  const q = "SELECT * FROM aset WHERE Beban = ?";
-  db.query(q, [beban], (err, result) => {
+  const { clause, params } = buildBebanFilterSQL("Beban", bebanList);
+  const q = `SELECT * FROM aset WHERE ${clause}`;
+  db.query(q, params, (err, result) => {
     if (err) return res.status(500).json(err);
     res.json(result.map(mapRow));
   });
@@ -126,8 +216,8 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
   );
   const q = `
     INSERT INTO aset 
-    (AsetId, AccurateId, NamaAset, Spesifikasi, Grup, Beban, AkunPerkiraan, NilaiAset, TglPembelian, MasaManfaat, Gambar, Keterangan, StatusAset)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (AsetId, AccurateId, NamaAset, Spesifikasi, Grup, Beban, AkunPerkiraan, NilaiAset, TglPembelian, MasaManfaat, Gambar, Keterangan, StatusAset, Pengguna, Lokasi, Tempat)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
@@ -144,6 +234,9 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
     fileName,
     data.Keterangan ?? null,
     data.StatusAset ?? null,
+    data.Pengguna ?? null,
+    data.Lokasi ?? null,
+    data.Tempat ?? null,
   ];
   try {
     console.log(`[aset] full values: ${JSON.stringify(values)}`);
@@ -155,6 +248,16 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
       return res.status(500).json(err);
     }
     console.log(`[aset] insertId: ${result.insertId}`);
+
+    // Log to riwayat (input)
+    const username =
+      req.cookies?.username || req.headers["x-username"] || "unknown";
+    getUserIdFromUsername(username, (errUser, user) => {
+      if (!errUser && user) {
+        logRiwayat("input", user.id, user.role, result.insertId, null);
+      }
+    });
+
     // Return the created asset for verification using insertId to avoid duplicates
     db.query(
       "SELECT * FROM aset WHERE id = ?",
@@ -193,13 +296,13 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
     const asset = mapRow(result[0]);
     const role = getRoleFromRequest(req);
     if (role === "admin") return res.json(asset);
-    const beban = getBebanFromRequest(req);
-    if (!beban || beban === "") {
+    const bebanList = getBebanListFromRequest(req);
+    if (!bebanList || bebanList.length === 0) {
       return res
         .status(403)
         .json({ message: "Akses ditolak: beban tidak ditemukan" });
     }
-    if ((asset.Beban ?? "") !== beban) {
+    if (!isSameLocation(asset.Beban ?? "", bebanList)) {
       return res.status(404).json({ message: "Aset tidak ditemukan" });
     }
     res.json(asset);
@@ -233,12 +336,15 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
       data.TglPembelian,
       data.MasaManfaat,
       data.StatusAset,
+      data.Pengguna,
+      data.Lokasi,
+      data.Tempat,
       data.Keterangan,
       data.Gambar ?? null,
       id,
     ];
 
-    const q = `UPDATE aset SET AccurateId = COALESCE(?, AccurateId), NamaAset = COALESCE(?, NamaAset), Spesifikasi = COALESCE(?, Spesifikasi), Grup = COALESCE(?, Grup), Beban = COALESCE(?, Beban), AkunPerkiraan = COALESCE(?, AkunPerkiraan), NilaiAset = COALESCE(?, NilaiAset), TglPembelian = COALESCE(?, TglPembelian), MasaManfaat = COALESCE(?, MasaManfaat), StatusAset = COALESCE(?, StatusAset), Keterangan = COALESCE(?, Keterangan), Gambar = COALESCE(?, Gambar) WHERE AsetId = ?`;
+    const q = `UPDATE aset SET AccurateId = COALESCE(?, AccurateId), NamaAset = COALESCE(?, NamaAset), Spesifikasi = COALESCE(?, Spesifikasi), Grup = COALESCE(?, Grup), Beban = COALESCE(?, Beban), AkunPerkiraan = COALESCE(?, AkunPerkiraan), NilaiAset = COALESCE(?, NilaiAset), TglPembelian = COALESCE(?, TglPembelian), MasaManfaat = COALESCE(?, MasaManfaat), StatusAset = COALESCE(?, StatusAset), Pengguna = COALESCE(?, Pengguna), Lokasi = COALESCE(?, Lokasi), Tempat = COALESCE(?, Tempat), Keterangan = COALESCE(?, Keterangan), Gambar = COALESCE(?, Gambar) WHERE AsetId = ?`;
     try {
       console.log(`[aset] PUT req.body: ${JSON.stringify(data)}`);
       console.log(
@@ -259,6 +365,63 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
       if (result.affectedRows === 0) {
         return res.json({ message: "Tidak ada perubahan (data sama)" });
       }
+
+      // Log perubahan to riwayat (edit with before/after)
+      const username =
+        req.cookies?.username || req.headers["x-username"] || "unknown";
+      getUserIdFromUsername(username, (errUser, user) => {
+        if (!errUser && user) {
+          // Helper to normalize values for comparison
+          const normalizeValue = (value, field) => {
+            if (value === null || value === undefined) return null;
+            // Normalize date fields to YYYY-MM-DD format for comparison
+            if (field === "TglPembelian") {
+              const d = new Date(value);
+              if (!isNaN(d.getTime())) {
+                return d.toISOString().split("T")[0];
+              }
+            }
+            return value;
+          };
+
+          // Build perubahan object showing what changed
+          const perubahan = {};
+          const fields = [
+            "AccurateId",
+            "NamaAset",
+            "Spesifikasi",
+            "Grup",
+            "Beban",
+            "AkunPerkiraan",
+            "NilaiAset",
+            "TglPembelian",
+            "MasaManfaat",
+            "StatusAset",
+            "Pengguna",
+            "Lokasi",
+            "Tempat",
+            "Keterangan",
+            "Gambar",
+          ];
+          fields.forEach((field) => {
+            if (data[field] !== undefined && data[field] !== null) {
+              const normalizedCurrent = normalizeValue(current[field], field);
+              const normalizedData = normalizeValue(data[field], field);
+
+              if (normalizedCurrent !== normalizedData) {
+                perubahan[field] = {
+                  before: current[field],
+                  after: data[field],
+                };
+              }
+            }
+          });
+          if (Object.keys(perubahan).length > 0) {
+            logRiwayat("edit", user.id, user.role, current.id, perubahan);
+          }
+        }
+      });
+
       // If we uploaded a new file, delete old file (oldGambar may store full path)
       if (req.file && oldGambar) {
         const oldBasename = path.basename(oldGambar);

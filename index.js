@@ -7,6 +7,8 @@ import path from "path";
 import asetRouter from "./routes/aset.js";
 import userRouter from "./routes/user.js";
 import perbaikanRouter from "./routes/perbaikan.js";
+import riwayatRouter from "./routes/riwayat.js";
+import notificationRouter from "./routes/notification.js";
 
 const app = express();
 app.use(express.json());
@@ -29,6 +31,8 @@ app.get("/", (req, res) => {
 app.use("/aset", asetRouter);
 app.use("/user", userRouter);
 app.use("/perbaikan", perbaikanRouter);
+app.use("/riwayat", riwayatRouter);
+app.use("/notification", notificationRouter);
 
 function printRoutes(app) {
   try {
@@ -82,6 +86,9 @@ function printRouterDetails(basePath, router) {
 
 printRouterDetails("/aset", asetRouter);
 printRouterDetails("/perbaikan", perbaikanRouter);
+printRouterDetails("/user", userRouter);
+printRouterDetails("/riwayat", riwayatRouter);
+printRouterDetails("/notification", notificationRouter);
 
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err?.stack ?? err);

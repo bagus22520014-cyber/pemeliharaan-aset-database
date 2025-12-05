@@ -17,13 +17,17 @@ db.query(qCheck, [username], (err, res) => {
     process.exit(0);
   }
   const qInsert =
-    "INSERT INTO user (username, password, role) VALUES (?, ?, ?)";
-  db.query(qInsert, [username, password, role], (err2, result) => {
-    if (err2) {
-      console.error("error inserting user", err2);
-      process.exit(1);
+    "INSERT INTO user (username, nama, password, role, Beban) VALUES (?, ?, ?, ?, JSON_ARRAY(?))";
+  db.query(
+    qInsert,
+    [username, "Admin", password, role, "MLM"],
+    (err2, result) => {
+      if (err2) {
+        console.error("error inserting user", err2);
+        process.exit(1);
+      }
+      console.log("inserted admin user id", result.insertId);
+      process.exit(0);
     }
-    console.log("inserted admin user id", result.insertId);
-    process.exit(0);
-  });
+  );
 });

@@ -82,17 +82,13 @@ Endpoints (role-aware):
 
 - Create a perbaikan (user or admin):
 
-```bash
-curl -v -X POST -H "x-role: admin" -H "Content-Type: application/json" -d '{"AsetId":"0001/HO/2019","tanggal":"2025-11-30","vendor":"Vendor ABC","PurchaseOrder":"PO-123","bagian":"IT","nominal":500000}' http://localhost:4000/perbaikan
-```
+````
 
 - List all perbaikan (admin):
 
 ```bash
 curl -v -H "x-role: admin" http://localhost:4000/perbaikan
-```
-
-- List perbaikan for a given asset by `AsetId` (two ways):
+````
 
 1. Query parameter:
 
@@ -133,3 +129,29 @@ If you just want to update `Keterangan`, there's now a dedicated endpoint:
 ```bash
 curl -v -X PUT -H "x-role: admin" -H "Content-Type: application/json" -d '{"Keterangan":"Perbaikan selesai: ganti fan, diuji dan OK"}' "http://localhost:4000/aset/0001%2FHO%2F2019/keterangan"
 ```
+
+## User table: multi-Beban support
+
+The `user` table now stores `Beban` as JSON so a user can belong to multiple departments. Example table definition:
+
+```sql
+CREATE TABLE `user` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `username` VARCHAR(50) NOT NULL UNIQUE,
+  `password` VARCHAR(255) NOT NULL,
+  `role` ENUM('admin', 'user') NOT NULL DEFAULT 'user',
+  `beban` JSON NOT NULL
+);
+```
+
+Example inserts for multi-beban users:
+
+```sql
+INSERT INTO `user` (username, password, role, beban) VALUES
+('admin', 'admin123', 'admin', JSON_ARRAY('MLM')),
+('bagus', 'user123', 'user', JSON_ARRAY('MLG-NET', 'MLG-MEDIA')),
+('andi',  'user123', 'user', JSON_ARRAY('SBY-NET')),
+('sari',  'user123', 'user', JSON_ARRAY('PKB-NET', 'PKB-MEDIA', 'MLM'));
+```
+
+The web server will set a `beban` cookie as a JSON array on login, and the APIs will honor all beban values in that array.

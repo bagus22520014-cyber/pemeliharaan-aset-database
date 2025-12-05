@@ -4,17 +4,102 @@ import {
   requireAdmin,
   requireUserOrAdmin,
   getRoleFromRequest,
-  getBebanFromRequest,
+  getBebanListFromRequest,
+  getBebanPrefix,
+  isSameLocation,
+  buildBebanFilterSQL,
 } from "./middleware/auth.js";
 
 const router = express.Router();
 
+// Helper function to log riwayat
+function logRiwayat(
+  jenisAksi,
+  userId,
+  role,
+  asetId,
+  perubahan,
+  tabelRef = "perbaikan",
+  recordId = null,
+  callback
+) {
+  const q = `INSERT INTO riwayat (jenis_aksi, user_id, role, aset_id, perubahan, tabel_ref, record_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  const perubahanJson = perubahan ? JSON.stringify(perubahan) : null;
+  db.query(
+    q,
+    [jenisAksi, userId, role, asetId, perubahanJson, tabelRef, recordId],
+    (err, result) => {
+      if (err) {
+        console.error("[riwayat] Error logging:", err);
+      } else {
+        console.log(
+          `[riwayat] Logged ${jenisAksi} for ${tabelRef} aset_id=${asetId} record_id=${recordId} by user_id=${userId}`
+        );
+      }
+      if (callback) callback(err, result);
+    }
+  );
+}
+
+// Helper function to create notification
+function createNotification(
+  userId,
+  beban,
+  tipe,
+  judul,
+  pesan,
+  link = null,
+  tabelRef = null,
+  recordId = null,
+  callback
+) {
+  const q = `INSERT INTO notification (user_id, beban, tipe, judul, pesan, link, tabel_ref, record_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+  db.query(
+    q,
+    [userId, beban, tipe, judul, pesan, link, tabelRef, recordId],
+    (err, result) => {
+      if (err) {
+        console.error("[notification] Error creating:", err);
+      } else {
+        console.log(
+          `[notification] Created ${tipe} notification for user_id=${userId} beban=${beban}`
+        );
+      }
+      if (callback) callback(err, result);
+    }
+  );
+}
+
+// Helper to get user_id from username
+function getUserIdFromUsername(username, callback) {
+  if (!username) return callback(new Error("Username not provided"));
+  db.query(
+    "SELECT id, role FROM user WHERE username = ?",
+    [username],
+    (err, rows) => {
+      if (err) return callback(err);
+      if (!rows || rows.length === 0)
+        return callback(new Error("User not found"));
+      callback(null, rows[0]);
+    }
+  );
+}
+
 function mapRow(r) {
   if (!r) return r;
+
+  // Helper to format date to YYYY-MM-DD
+  const formatDate = (date) => {
+    if (!date) return null;
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString().split("T")[0];
+  };
+
   return {
     id: r.id ?? null,
     AsetId: r.AsetId ?? null,
-    tanggal: r.tanggal ?? null,
+    tanggal: formatDate(r.tanggal),
     PurchaseOrder: r.PurchaseOrder ?? null,
     vendor: r.vendor ?? null,
     bagian: r.bagian ?? null,
@@ -25,7 +110,7 @@ function mapRow(r) {
 // Logging
 router.use((req, res, next) => {
   const role = getRoleFromRequest(req) || "(none)";
-  const beban = getBebanFromRequest(req) || "(none)";
+  const beban = getBebanListFromRequest(req) || ["(none)"];
   console.log(
     `[perbaikan] ${req.method} ${req.originalUrl} - role=${role} beban=${beban}`
   );
@@ -50,14 +135,19 @@ router.get("/", requireUserOrAdmin, (req, res) => {
       );
       return;
     }
-    const bebanQ = getBebanFromRequest(req);
-    if (!bebanQ || bebanQ === "") {
+    const bebanQ = getBebanListFromRequest(req);
+    if (!bebanQ || bebanQ.length === 0) {
       return res
         .status(403)
         .json({ message: "Akses ditolak: beban tidak ditemukan" });
     }
-    const q = `SELECT p.* FROM perbaikan p JOIN aset a ON a.AsetId = p.AsetId WHERE a.Beban = ? AND p.AsetId = ?`;
-    db.query(q, [bebanQ, queryAset], (err, rows) => {
+    const { clause, params: baseParams } = buildBebanFilterSQL(
+      "a.Beban",
+      bebanQ
+    );
+    const q = `SELECT p.* FROM perbaikan p JOIN aset a ON a.AsetId = p.AsetId WHERE ${clause} AND p.AsetId = ?`;
+    const params = [...baseParams, queryAset];
+    db.query(q, params, (err, rows) => {
       if (err) return res.status(500).json(err);
       res.json(rows.map(mapRow));
     });
@@ -71,14 +161,15 @@ router.get("/", requireUserOrAdmin, (req, res) => {
     });
     return;
   }
-  const beban = getBebanFromRequest(req);
-  if (!beban || beban === "") {
+  const beban = getBebanListFromRequest(req);
+  if (!beban || beban.length === 0) {
     return res
       .status(403)
       .json({ message: "Akses ditolak: beban tidak ditemukan" });
   }
-  const q = `SELECT p.* FROM perbaikan p JOIN aset a ON a.AsetId = p.AsetId WHERE a.Beban = ?`;
-  db.query(q, [beban], (err, rows) => {
+  const { clause, params } = buildBebanFilterSQL("a.Beban", beban);
+  const q = `SELECT p.* FROM perbaikan p JOIN aset a ON a.AsetId = p.AsetId WHERE ${clause}`;
+  db.query(q, params, (err, rows) => {
     if (err) return res.status(500).json(err);
     res.json(rows.map(mapRow));
   });
@@ -100,13 +191,15 @@ router.get("/aset/:asetId", requireUserOrAdmin, (req, res) => {
     );
     return;
   }
-  const beban = getBebanFromRequest(req);
-  if (!beban || beban === "")
+  const beban = getBebanListFromRequest(req);
+  if (!beban || beban.length === 0)
     return res
       .status(403)
       .json({ message: "Akses ditolak: beban tidak ditemukan" });
-  const q = `SELECT p.* FROM perbaikan p JOIN aset a ON a.AsetId = p.AsetId WHERE a.Beban = ? AND p.AsetId = ?`;
-  db.query(q, [beban, asetId], (err, rows) => {
+  const { clause, params } = buildBebanFilterSQL("a.Beban", beban);
+  const q = `SELECT p.* FROM perbaikan p JOIN aset a ON a.AsetId = p.AsetId WHERE ${clause} AND p.AsetId = ?`;
+  params.push(asetId);
+  db.query(q, params, (err, rows) => {
     if (err) return res.status(500).json(err);
     res.json(rows.map(mapRow));
   });
@@ -122,8 +215,8 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
     const p = rows[0];
     const role = getRoleFromRequest(req);
     if (role === "admin") return res.json(mapRow(p));
-    const beban = getBebanFromRequest(req);
-    if (!beban || beban === "") {
+    const beban = getBebanListFromRequest(req);
+    if (!beban || beban.length === 0) {
       return res
         .status(403)
         .json({ message: "Akses ditolak: beban tidak ditemukan" });
@@ -134,7 +227,7 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
       if (!rows2 || rows2.length === 0)
         return res.status(404).json({ message: "Parent aset tidak ditemukan" });
       const asetBeban = rows2[0].Beban ?? null;
-      if (asetBeban !== beban)
+      if (!isSameLocation(asetBeban ?? "", beban))
         return res.status(404).json({ message: "Perbaikan tidak ditemukan" });
       res.json(mapRow(p));
     });
@@ -148,14 +241,14 @@ router.post("/", requireUserOrAdmin, (req, res) => {
     return res.status(400).json({ message: "AsetId dan tanggal diperlukan" });
   }
   const role = getRoleFromRequest(req);
-  const beban = getBebanFromRequest(req);
+  const beban = getBebanListFromRequest(req);
   const checkAsetQ = "SELECT Beban FROM aset WHERE AsetId = ?";
   db.query(checkAsetQ, [data.AsetId], (err, rows) => {
     if (err) return res.status(500).json(err);
     if (!rows || rows.length === 0)
       return res.status(404).json({ message: "Aset tidak ditemukan" });
     const asetBeban = rows[0].Beban ?? null;
-    if (role !== "admin" && asetBeban !== beban) {
+    if (role !== "admin" && !isSameLocation(asetBeban ?? "", beban)) {
       return res
         .status(403)
         .json({ message: "Akses ditolak: tidak punya akses ke Aset ini" });
@@ -171,11 +264,55 @@ router.post("/", requireUserOrAdmin, (req, res) => {
     ];
     db.query(q, vals, (err2, result) => {
       if (err2) return res.status(500).json(err2);
+
+      const perbaikanId = result.insertId;
+
       db.query(
         "SELECT * FROM perbaikan WHERE id = ?",
-        [result.insertId],
+        [perbaikanId],
         (err3, rows3) => {
           if (err3) return res.status(500).json(err3);
+
+          // Log riwayat
+          const username = req.cookies.username || req.headers["x-username"];
+          if (username) {
+            getUserIdFromUsername(username, (err4, userData) => {
+              if (!err4 && userData) {
+                // Get aset.id for logging
+                db.query(
+                  "SELECT id FROM aset WHERE AsetId = ?",
+                  [data.AsetId],
+                  (err5, asetRows) => {
+                    if (!err5 && asetRows && asetRows.length > 0) {
+                      const asetDbId = asetRows[0].id;
+                      logRiwayat(
+                        "perbaikan_input",
+                        userData.id,
+                        userData.role,
+                        asetDbId,
+                        null,
+                        "perbaikan",
+                        perbaikanId
+                      );
+
+                      // Create notification for the beban
+                      createNotification(
+                        null, // broadcast to beban
+                        asetBeban,
+                        "info",
+                        "Perbaikan Baru Ditambahkan",
+                        `Perbaikan untuk aset ${data.AsetId} telah ditambahkan oleh ${username}`,
+                        `/perbaikan/${perbaikanId}`,
+                        "perbaikan",
+                        perbaikanId
+                      );
+                    }
+                  }
+                );
+              }
+            });
+          }
+
           res.status(201).json({
             message: "Perbaikan ditambahkan",
             perbaikan: mapRow(rows3[0]),
@@ -195,6 +332,9 @@ router.put("/:id", requireAdmin, (req, res) => {
     if (err) return res.status(500).json(err);
     if (!rows || rows.length === 0)
       return res.status(404).json({ message: "Perbaikan tidak ditemukan" });
+
+    const current = rows[0];
+
     const values = [
       data.AsetId,
       data.tanggal,
@@ -209,6 +349,96 @@ router.put("/:id", requireAdmin, (req, res) => {
       if (err2) return res.status(500).json(err2);
       db.query("SELECT * FROM perbaikan WHERE id = ?", [id], (err3, rows3) => {
         if (err3) return res.status(500).json(err3);
+
+        // Log riwayat with changes
+        const username = req.cookies.username || req.headers["x-username"];
+        if (username) {
+          getUserIdFromUsername(username, (err4, userData) => {
+            if (!err4 && userData) {
+              // Helper to normalize values for comparison
+              const normalizeValue = (value, field) => {
+                if (value === null || value === undefined) return null;
+                // Normalize date fields to YYYY-MM-DD format for comparison
+                if (field === "tanggal") {
+                  const d = new Date(value);
+                  if (!isNaN(d.getTime())) {
+                    return d.toISOString().split("T")[0];
+                  }
+                }
+                return value;
+              };
+
+              // Build perubahan object
+              const perubahan = {};
+              const updated = rows3[0];
+              const fields = [
+                "AsetId",
+                "tanggal",
+                "PurchaseOrder",
+                "vendor",
+                "bagian",
+                "nominal",
+              ];
+
+              fields.forEach((field) => {
+                if (data[field] !== undefined) {
+                  const normalizedCurrent = normalizeValue(
+                    current[field],
+                    field
+                  );
+                  const normalizedUpdated = normalizeValue(
+                    updated[field],
+                    field
+                  );
+
+                  if (normalizedCurrent !== normalizedUpdated) {
+                    perubahan[field] = {
+                      before: current[field],
+                      after: updated[field],
+                    };
+                  }
+                }
+              });
+
+              if (Object.keys(perubahan).length > 0) {
+                // Get aset.id for logging
+                db.query(
+                  "SELECT id, Beban FROM aset WHERE AsetId = ?",
+                  [updated.AsetId],
+                  (err5, asetRows) => {
+                    if (!err5 && asetRows && asetRows.length > 0) {
+                      const asetDbId = asetRows[0].id;
+                      const asetBeban = asetRows[0].Beban;
+
+                      logRiwayat(
+                        "perbaikan_edit",
+                        userData.id,
+                        userData.role,
+                        asetDbId,
+                        perubahan,
+                        "perbaikan",
+                        id
+                      );
+
+                      // Create notification
+                      createNotification(
+                        null,
+                        asetBeban,
+                        "warning",
+                        "Perbaikan Diupdate",
+                        `Perbaikan untuk aset ${updated.AsetId} telah diupdate oleh ${username}`,
+                        `/perbaikan/${id}`,
+                        "perbaikan",
+                        id
+                      );
+                    }
+                  }
+                );
+              }
+            }
+          });
+        }
+
         res.json({
           message: "Perbaikan berhasil diupdate",
           perbaikan: mapRow(rows3[0]),
@@ -221,13 +451,59 @@ router.put("/:id", requireAdmin, (req, res) => {
 // Delete (admin only)
 router.delete("/:id", requireAdmin, (req, res) => {
   const { id } = req.params;
-  const q = "DELETE FROM perbaikan WHERE id = ?";
-  db.query(q, [id], (err, r) => {
-    if (err) return res.status(500).json(err);
-    if (r.affectedRows === 0)
-      return res.status(404).json({ message: "Perbaikan tidak ditemukan" });
-    res.json({ message: "Perbaikan berhasil dihapus" });
-  });
+
+  // Get perbaikan info before deleting
+  db.query(
+    "SELECT p.*, a.id as aset_db_id, a.Beban FROM perbaikan p JOIN aset a ON p.AsetId = a.AsetId WHERE p.id = ?",
+    [id],
+    (err, rows) => {
+      if (err) return res.status(500).json(err);
+      if (!rows || rows.length === 0) {
+        return res.status(404).json({ message: "Perbaikan tidak ditemukan" });
+      }
+
+      const perbaikan = rows[0];
+      const username = req.cookies.username || req.headers["x-username"];
+
+      const q = "DELETE FROM perbaikan WHERE id = ?";
+      db.query(q, [id], (err2, r) => {
+        if (err2) return res.status(500).json(err2);
+        if (r.affectedRows === 0)
+          return res.status(404).json({ message: "Perbaikan tidak ditemukan" });
+
+        // Log riwayat
+        if (username) {
+          getUserIdFromUsername(username, (err3, userData) => {
+            if (!err3 && userData) {
+              logRiwayat(
+                "perbaikan_delete",
+                userData.id,
+                userData.role,
+                perbaikan.aset_db_id,
+                { deleted_data: perbaikan },
+                "perbaikan",
+                id
+              );
+
+              // Create notification
+              createNotification(
+                null,
+                perbaikan.Beban,
+                "error",
+                "Perbaikan Dihapus",
+                `Perbaikan untuk aset ${perbaikan.AsetId} telah dihapus oleh ${username}`,
+                null,
+                "perbaikan",
+                id
+              );
+            }
+          });
+        }
+
+        res.json({ message: "Perbaikan berhasil dihapus" });
+      });
+    }
+  );
 });
 
 export default router;

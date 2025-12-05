@@ -20,12 +20,15 @@ CREATE TABLE aset (
   NamaAset VARCHAR(255) NOT NULL,
   Spesifikasi TEXT,
   Grup ENUM('BANGUNAN','DISTRIBUSI JARINGAN','HEADEND','KENDARAAN','KOMPUTER','PERALATAN & INVENTARIS KANTOR','TANAH') NOT NULL,
-  Beban ENUM('HO','BJR-NET','BNT-NET','BTM-NET','GTO-NET','KDR-NET','LMP-NET','MLG-NET','PDG-NET','PKB-NET','PKP-NET','PLB-NET','SBY-NET','SMD-NET','SRG-NET','MLMKOB','MLMMET','MLMSDKB','MLMSL','BJR-MEDIA','BNT-MEDIA','BTM-MEDIA','GTO-MEDIA','KDR-MEDIA','LMP-MEDIA','MLG-MEDIA','PDG-MEDIA','PKB-MEDIA','PKP-MEDIA','PLB-MEDIA','SBY-MEDIA','SMD-MEDIA','SRG-MEDIA') NOT NULL,
+  Beban ENUM('MLM','BJR-NET','BNT-NET','BTM-NET','GTO-NET','KDR-NET','LMP-NET','MLG-NET','PDG-NET','PKB-NET','PKP-NET','PLB-NET','SBY-NET','SMD-NET','SRG-NET','MLMKOB','MLMMET','MLMSDKB','MLMSL','BJR-MEDIA','BNT-MEDIA','BTM-MEDIA','GTO-MEDIA','KDR-MEDIA','LMP-MEDIA','MLG-MEDIA','PDG-MEDIA','PKB-MEDIA','PKP-MEDIA','PLB-MEDIA','SBY-MEDIA','SMD-MEDIA','SRG-MEDIA') NOT NULL,
   AkunPerkiraan ENUM('1701-01 (Tanah)','1701-02 (Bangunan)','1701-03 (Kendaraan)','1701-04 (Distribusi Jaringan / Headend)','1701-05 (Peralatan & Inventaris Kantor)','1701-06 (Renovasi & Instalasi Listrik)','1701-07 (Perlengkapan & Inventaris IT)'),
   NilaiAset INT,
   TglPembelian DATE,
   MasaManfaat INT,
   StatusAset ENUM('aktif','rusak','diperbaiki','dipinjam','dijual') NOT NULL DEFAULT 'aktif',
+  Pengguna VARCHAR(100),
+  Lokasi VARCHAR(255),
+  Tempat VARCHAR(150),
   Keterangan TEXT,
   Gambar VARCHAR(255)
 );
@@ -83,7 +86,7 @@ db.query(checkExistsQ, [DB], (err, rows) => {
         },
         {
           name: "Beban",
-          def: `ENUM('HO','BJR-NET','BNT-NET','BTM-NET','GTO-NET','KDR-NET','LMP-NET','MLG-NET','PDG-NET','PKB-NET','PKP-NET','PLB-NET','SBY-NET','SMD-NET','SRG-NET','MLMKOB','MLMMET','MLMSDKB','MLMSL','BJR-MEDIA','BNT-MEDIA','BTM-MEDIA','GTO-MEDIA','KDR-MEDIA','LMP-MEDIA','MLG-MEDIA','PDG-MEDIA','PKB-MEDIA','PKP-MEDIA','PLB-MEDIA','SBY-MEDIA','SMD-MEDIA','SRG-MEDIA') NOT NULL`,
+          def: `ENUM('MLM','BJR-NET','BNT-NET','BTM-NET','GTO-NET','KDR-NET','LMP-NET','MLG-NET','PDG-NET','PKB-NET','PKP-NET','PLB-NET','SBY-NET','SMD-NET','SRG-NET','MLMKOB','MLMMET','MLMSDKB','MLMSL','BJR-MEDIA','BNT-MEDIA','BTM-MEDIA','GTO-MEDIA','KDR-MEDIA','LMP-MEDIA','MLG-MEDIA','PDG-MEDIA','PKB-MEDIA','PKP-MEDIA','PLB-MEDIA','SBY-MEDIA','SMD-MEDIA','SRG-MEDIA') NOT NULL`,
         },
         {
           name: "AkunPerkiraan",
@@ -96,8 +99,12 @@ db.query(checkExistsQ, [DB], (err, rows) => {
           name: "StatusAset",
           def: `ENUM('aktif','rusak','diperbaiki','dipinjam','dijual') NOT NULL DEFAULT 'aktif'`,
         },
+        { name: "Pengguna", def: "VARCHAR(100)" },
+        { name: "Lokasi", def: "VARCHAR(255)" },
+        { name: "Tempat", def: "VARCHAR(150)" },
         { name: "Keterangan", def: "TEXT" },
         { name: "Gambar", def: "VARCHAR(255)" },
+        { name: "FromMaster", def: "TINYINT(1) NOT NULL DEFAULT 0" },
       ];
       const existingColNames = new Set(cols.map((c) => c.COLUMN_NAME));
       const toAdd = desiredCols.filter((d) => !existingColNames.has(d.name));
