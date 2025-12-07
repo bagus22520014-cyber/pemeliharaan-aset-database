@@ -91,8 +91,8 @@ router.get("/", requireUserOrAdmin, (req, res) => {
       .status(403)
       .json({ message: "Akses ditolak: beban tidak ditemukan" });
   }
-  const { clause, params } = buildBebanFilterSQL("a.Beban", beban);
-  const q = `SELECT d.*, a.AsetId, a.NamaAset FROM dijual d LEFT JOIN aset a ON d.aset_id = a.id WHERE ${clause}`;
+  const { clause, params } = buildBebanFilterSQL("b.kode", beban);
+  const q = `SELECT d.*, a.AsetId, a.NamaAset FROM dijual d LEFT JOIN aset a ON d.aset_id = a.id LEFT JOIN beban b ON a.beban_id = b.id WHERE ${clause}`;
   db.query(q, params, (err, rows) => {
     if (err) return res.status(500).json(err);
     res.json(rows.map(mapRow));
@@ -119,8 +119,8 @@ router.get("/aset/:asetId", requireUserOrAdmin, (req, res) => {
     return res
       .status(403)
       .json({ message: "Akses ditolak: beban tidak ditemukan" });
-  const { clause, params } = buildBebanFilterSQL("a.Beban", beban);
-  const q = `SELECT d.*, a.AsetId, a.NamaAset FROM dijual d LEFT JOIN aset a ON d.aset_id = a.id WHERE ${clause} AND a.AsetId = ?`;
+  const { clause, params } = buildBebanFilterSQL("b.kode", beban);
+  const q = `SELECT d.*, a.AsetId, a.NamaAset FROM dijual d LEFT JOIN aset a ON d.aset_id = a.id LEFT JOIN beban b ON a.beban_id = b.id WHERE ${clause} AND a.AsetId = ?`;
   params.push(asetId);
   db.query(q, params, (err, rows) => {
     if (err) return res.status(500).json(err);

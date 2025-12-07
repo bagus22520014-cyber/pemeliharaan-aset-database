@@ -5,6 +5,7 @@ import {
   requireAdmin,
   getRoleFromRequest,
   getBebanFromRequest,
+  getBebanListFromRequest,
 } from "./middleware/auth.js";
 
 const router = express.Router();
@@ -47,7 +48,7 @@ function mapRow(row) {
  */
 router.get("/", requireUserOrAdmin, (req, res) => {
   const role = getRoleFromRequest(req);
-  const beban = getBebanFromRequest(req);
+  const bebanList = getBebanListFromRequest(req);
 
   let query = `
     SELECT al.*, a.NamaAset 
@@ -58,9 +59,10 @@ router.get("/", requireUserOrAdmin, (req, res) => {
 
   const params = [];
 
-  if (role !== "admin") {
-    query += " WHERE b.kode = ?";
-    params.push(beban);
+  if (role !== "admin" && bebanList.length > 0) {
+    const placeholders = bebanList.map(() => "?").join(",");
+    query += ` WHERE al.beban IN (${placeholders})`;
+    params.push(...bebanList);
   }
 
   query += " ORDER BY al.created_at DESC";
@@ -78,7 +80,7 @@ router.get("/", requireUserOrAdmin, (req, res) => {
 router.get("/aset/:asetId", requireUserOrAdmin, (req, res) => {
   const { asetId } = req.params;
   const role = getRoleFromRequest(req);
-  const beban = getBebanFromRequest(req);
+  const bebanList = getBebanListFromRequest(req);
 
   let query = `
     SELECT al.*, a.NamaAset, a.jumlah as total_jumlah
@@ -90,9 +92,10 @@ router.get("/aset/:asetId", requireUserOrAdmin, (req, res) => {
 
   const params = [asetId];
 
-  if (role !== "admin") {
-    query += " AND b.kode = ?";
-    params.push(beban);
+  if (role !== "admin" && bebanList.length > 0) {
+    const placeholders = bebanList.map(() => "?").join(",");
+    query += ` AND al.beban IN (${placeholders})`;
+    params.push(...bebanList);
   }
 
   query += " ORDER BY al.lokasi ASC";
@@ -122,7 +125,7 @@ router.get("/aset/:asetId", requireUserOrAdmin, (req, res) => {
 router.get("/lokasi/:lokasi", requireUserOrAdmin, (req, res) => {
   const { lokasi } = req.params;
   const role = getRoleFromRequest(req);
-  const beban = getBebanFromRequest(req);
+  const bebanList = getBebanListFromRequest(req);
 
   let query = `
     SELECT al.*, a.NamaAset, a.Grup, b.kode as beban_kode
@@ -134,9 +137,10 @@ router.get("/lokasi/:lokasi", requireUserOrAdmin, (req, res) => {
 
   const params = [lokasi];
 
-  if (role !== "admin") {
-    query += " AND b.kode = ?";
-    params.push(beban);
+  if (role !== "admin" && bebanList.length > 0) {
+    const placeholders = bebanList.map(() => "?").join(",");
+    query += ` AND al.beban IN (${placeholders})`;
+    params.push(...bebanList);
   }
 
   query += " ORDER BY a.NamaAset ASC";
