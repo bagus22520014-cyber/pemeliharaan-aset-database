@@ -167,10 +167,10 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
 // POST create
 router.post("/", requireUserOrAdmin, (req, res) => {
   const data = req.body;
-  if (!data || !data.AsetId || !data.tanggal_jual) {
+  if (!data || !data.AsetId || !data.tanggal_jual || !data.lokasi_id) {
     return res
       .status(400)
-      .json({ message: "AsetId dan tanggal_jual diperlukan" });
+      .json({ message: "AsetId, tanggal_jual, dan lokasi_id diperlukan" });
   }
   const role = getRoleFromRequest(req);
   const beban = getBebanListFromRequest(req);
@@ -187,79 +187,124 @@ router.post("/", requireUserOrAdmin, (req, res) => {
         .json({ message: "Akses ditolak: tidak punya akses ke Aset ini" });
     }
 
-    const username = req.cookies?.username || req.headers["x-username"];
     const asetDbId = rows[0].id;
     const jumlahDijual = parseInt(data.jumlah_dijual) || 1;
 
-    const insertDijual = (uid) => {
-      const q = `INSERT INTO dijual (aset_id, TglDijual, HargaJual, Pembeli, jumlah_dijual, catatan) VALUES (?, ?, ?, ?, ?, ?)`;
-      const vals = [
-        asetDbId,
-        data.tanggal_jual,
-        data.harga_jual ?? null,
-        data.pembeli ?? null,
-        jumlahDijual,
-        data.alasan ?? data.catatan ?? null,
-      ];
-      db.query(q, vals, (err2, result) => {
-        if (err2) return res.status(500).json(err2);
+    // Check lokasi exists and has enough stock
+    db.query(
+      "SELECT * FROM aset_lokasi WHERE id = ? AND AsetId = ?",
+      [data.lokasi_id, data.AsetId],
+      (errLok, lokasiRows) => {
+        if (errLok) return res.status(500).json(errLok);
+        if (!lokasiRows || lokasiRows.length === 0) {
+          return res.status(404).json({ message: "Lokasi tidak ditemukan" });
+        }
+        const lokasi = lokasiRows[0];
+        if (lokasi.jumlah < jumlahDijual) {
+          return res.status(400).json({
+            message: "Stok di lokasi tidak mencukupi",
+            available: lokasi.jumlah,
+            requested: jumlahDijual,
+          });
+        }
 
-        const dijualId = result.insertId;
+        const username = req.cookies?.username || req.headers["x-username"];
 
-        // Decrease aset jumlah and update StatusAset to 'dijual'
-        db.query(
-          "UPDATE aset SET jumlah = GREATEST(jumlah - ?, 0), StatusAset = 'dijual' WHERE AsetId = ?",
-          [jumlahDijual, data.AsetId],
-          (errUpdate) => {
-            if (errUpdate) {
-              console.error("[dijual] Error updating aset:", errUpdate);
-            } else {
-              console.log(
-                `[dijual] Decreased jumlah and set StatusAset='dijual' for AsetId=${data.AsetId}`
-              );
-            }
-          }
-        );
+        const insertDijual = (uid) => {
+          const q = `INSERT INTO dijual (aset_id, TglDijual, HargaJual, Pembeli, jumlah_dijual, catatan, lokasi_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+          const vals = [
+            asetDbId,
+            data.tanggal_jual,
+            data.harga_jual ?? null,
+            data.pembeli ?? null,
+            jumlahDijual,
+            data.alasan ?? data.catatan ?? null,
+            data.lokasi_id,
+          ];
+          db.query(q, vals, (err2, result) => {
+            if (err2) return res.status(500).json(err2);
 
-        db.query(
-          "SELECT d.*, a.AsetId, a.NamaAset FROM dijual d LEFT JOIN aset a ON d.aset_id = a.id WHERE d.id = ?",
-          [dijualId],
-          (err3, rows3) => {
-            if (err3) return res.status(500).json(err3);
+            const dijualId = result.insertId;
 
-            // Log riwayat
-            if (username) {
-              getUserIdFromUsername(username, (err4, userData) => {
-                if (!err4 && userData) {
-                  logRiwayat(
-                    "dijual_input",
-                    userData.id,
-                    userData.role,
-                    asetDbId,
-                    null,
-                    "dijual",
-                    dijualId
+            // Decrease lokasi jumlah
+            db.query(
+              "UPDATE aset_lokasi SET jumlah = GREATEST(jumlah - ?, 0) WHERE id = ?",
+              [jumlahDijual, data.lokasi_id],
+              (errUpdateLok) => {
+                if (errUpdateLok) {
+                  console.error(
+                    "[dijual] Error updating lokasi:",
+                    errUpdateLok
                   );
+                  return res.status(500).json(errUpdateLok);
                 }
-              });
-            }
 
-            res.status(201).json({
-              message: "Data penjualan ditambahkan",
-              dijual: mapRow(rows3[0]),
-            });
-          }
-        );
-      });
-    };
+                // Update total jumlah in aset based on sum of lokasi
+                db.query(
+                  "UPDATE aset SET jumlah = (SELECT COALESCE(SUM(jumlah), 0) FROM aset_lokasi WHERE AsetId = ?), StatusAset = 'dijual' WHERE AsetId = ?",
+                  [data.AsetId, data.AsetId],
+                  (errUpdate) => {
+                    if (errUpdate) {
+                      console.error("[dijual] Error updating aset:", errUpdate);
+                    } else {
+                      console.log(
+                        `[dijual] Decreased jumlah by ${jumlahDijual} from lokasi_id=${data.lokasi_id} and set StatusAset='dijual' for AsetId=${data.AsetId}`
+                      );
+                    }
+                  }
+                );
 
-    if (username) {
-      getUserIdFromUsername(username, (errUser, userData) => {
-        insertDijual(errUser || !userData ? null : userData.id);
-      });
-    } else {
-      insertDijual(null);
-    }
+                db.query(
+                  "SELECT d.*, a.AsetId, a.NamaAset, al.lokasi FROM dijual d LEFT JOIN aset a ON d.aset_id = a.id LEFT JOIN aset_lokasi al ON d.lokasi_id = al.id WHERE d.id = ?",
+                  [dijualId],
+                  (err3, rows3) => {
+                    if (err3) return res.status(500).json(err3);
+
+                    // Log riwayat
+                    if (username) {
+                      getUserIdFromUsername(username, (err4, userData) => {
+                        if (!err4 && userData) {
+                          logRiwayat(
+                            "dijual_input",
+                            userData.id,
+                            userData.role,
+                            asetDbId,
+                            {
+                              lokasi: lokasi.lokasi,
+                              lokasi_id: data.lokasi_id,
+                              jumlah_dijual: jumlahDijual,
+                            },
+                            "dijual",
+                            dijualId
+                          );
+                        }
+                      });
+                    }
+
+                    const response = mapRow(rows3[0]);
+                    response.lokasi = lokasi.lokasi;
+                    response.lokasi_id = data.lokasi_id;
+
+                    res.status(201).json({
+                      message: "Data penjualan ditambahkan",
+                      dijual: response,
+                    });
+                  }
+                );
+              }
+            );
+          });
+        };
+
+        if (username) {
+          getUserIdFromUsername(username, (errUser, userData) => {
+            insertDijual(errUser || !userData ? null : userData.id);
+          });
+        } else {
+          insertDijual(null);
+        }
+      }
+    );
   });
 });
 

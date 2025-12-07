@@ -163,8 +163,10 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
 // POST create
 router.post("/", requireUserOrAdmin, (req, res) => {
   const data = req.body;
-  if (!data || !data.AsetId || !data.TglRusak) {
-    return res.status(400).json({ message: "AsetId dan TglRusak diperlukan" });
+  if (!data || !data.AsetId || !data.TglRusak || !data.lokasi_id) {
+    return res
+      .status(400)
+      .json({ message: "AsetId, TglRusak, dan lokasi_id diperlukan" });
   }
   const role = getRoleFromRequest(req);
   const beban = getBebanListFromRequest(req);
@@ -182,78 +184,120 @@ router.post("/", requireUserOrAdmin, (req, res) => {
         .json({ message: "Akses ditolak: tidak punya akses ke Aset ini" });
     }
 
-    const username = req.cookies?.username || req.headers["x-username"];
     const jumlahRusak = parseInt(data.jumlah_rusak) || 1;
 
-    const insertRusak = (uid) => {
-      const q = `INSERT INTO rusak (aset_id, TglRusak, Kerusakan, jumlah_rusak, StatusRusak, catatan) VALUES (?, ?, ?, ?, ?, ?)`;
-      const vals = [
-        asetDbId,
-        data.TglRusak,
-        data.Kerusakan ?? null,
-        jumlahRusak,
-        data.StatusRusak ?? "temporary",
-        data.catatan ?? null,
-      ];
-      db.query(q, vals, (err2, result) => {
-        if (err2) return res.status(500).json(err2);
+    // Check lokasi exists and has enough stock
+    db.query(
+      "SELECT * FROM aset_lokasi WHERE id = ? AND AsetId = ?",
+      [data.lokasi_id, data.AsetId],
+      (errLok, lokasiRows) => {
+        if (errLok) return res.status(500).json(errLok);
+        if (!lokasiRows || lokasiRows.length === 0) {
+          return res.status(404).json({ message: "Lokasi tidak ditemukan" });
+        }
+        const lokasi = lokasiRows[0];
+        if (lokasi.jumlah < jumlahRusak) {
+          return res.status(400).json({
+            message: "Stok di lokasi tidak mencukupi",
+            available: lokasi.jumlah,
+            requested: jumlahRusak,
+          });
+        }
 
-        const rusakId = result.insertId;
+        const username = req.cookies?.username || req.headers["x-username"];
 
-        // Decrease aset jumlah and update StatusAset to 'rusak'
-        db.query(
-          "UPDATE aset SET jumlah = GREATEST(jumlah - ?, 0), StatusAset = 'rusak' WHERE AsetId = ?",
-          [jumlahRusak, data.AsetId],
-          (errUpdate) => {
-            if (errUpdate) {
-              console.error("[rusak] Error updating aset:", errUpdate);
-            } else {
-              console.log(
-                `[rusak] Decreased jumlah by ${jumlahRusak} and set StatusAset='rusak' for AsetId=${data.AsetId}`
-              );
-            }
-          }
-        );
+        const insertRusak = (uid) => {
+          const q = `INSERT INTO rusak (aset_id, TglRusak, Kerusakan, jumlah_rusak, StatusRusak, catatan, lokasi_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+          const vals = [
+            asetDbId,
+            data.TglRusak,
+            data.Kerusakan ?? null,
+            jumlahRusak,
+            data.StatusRusak ?? "temporary",
+            data.catatan ?? null,
+            data.lokasi_id,
+          ];
+          db.query(q, vals, (err2, result) => {
+            if (err2) return res.status(500).json(err2);
 
-        db.query(
-          "SELECT r.*, a.AsetId, a.NamaAset FROM rusak r LEFT JOIN aset a ON r.aset_id = a.id WHERE r.id = ?",
-          [rusakId],
-          (err3, rows3) => {
-            if (err3) return res.status(500).json(err3);
+            const rusakId = result.insertId;
 
-            // Log riwayat
-            if (username) {
-              getUserIdFromUsername(username, (err4, userData) => {
-                if (!err4 && userData) {
-                  logRiwayat(
-                    "rusak_input",
-                    userData.id,
-                    userData.role,
-                    asetDbId,
-                    null,
-                    "rusak",
-                    rusakId
-                  );
+            // Decrease lokasi jumlah
+            db.query(
+              "UPDATE aset_lokasi SET jumlah = GREATEST(jumlah - ?, 0) WHERE id = ?",
+              [jumlahRusak, data.lokasi_id],
+              (errUpdateLok) => {
+                if (errUpdateLok) {
+                  console.error("[rusak] Error updating lokasi:", errUpdateLok);
+                  return res.status(500).json(errUpdateLok);
                 }
-              });
-            }
 
-            res.status(201).json({
-              message: "Data kerusakan ditambahkan",
-              rusak: mapRow(rows3[0]),
-            });
-          }
-        );
-      });
-    };
+                // Update total jumlah in aset based on sum of lokasi
+                db.query(
+                  "UPDATE aset SET jumlah = (SELECT COALESCE(SUM(jumlah), 0) FROM aset_lokasi WHERE AsetId = ?), StatusAset = 'rusak' WHERE AsetId = ?",
+                  [data.AsetId, data.AsetId],
+                  (errUpdate) => {
+                    if (errUpdate) {
+                      console.error("[rusak] Error updating aset:", errUpdate);
+                    } else {
+                      console.log(
+                        `[rusak] Decreased jumlah by ${jumlahRusak} from lokasi_id=${data.lokasi_id} and set StatusAset='rusak' for AsetId=${data.AsetId}`
+                      );
+                    }
+                  }
+                );
 
-    if (username) {
-      getUserIdFromUsername(username, (errUser, userData) => {
-        insertRusak(errUser || !userData ? null : userData.id);
-      });
-    } else {
-      insertRusak(null);
-    }
+                db.query(
+                  "SELECT r.*, a.AsetId, a.NamaAset, al.lokasi FROM rusak r LEFT JOIN aset a ON r.aset_id = a.id LEFT JOIN aset_lokasi al ON r.lokasi_id = al.id WHERE r.id = ?",
+                  [rusakId],
+                  (err3, rows3) => {
+                    if (err3) return res.status(500).json(err3);
+
+                    // Log riwayat
+                    if (username) {
+                      getUserIdFromUsername(username, (err4, userData) => {
+                        if (!err4 && userData) {
+                          logRiwayat(
+                            "rusak_input",
+                            userData.id,
+                            userData.role,
+                            asetDbId,
+                            {
+                              lokasi: lokasi.lokasi,
+                              lokasi_id: data.lokasi_id,
+                              jumlah_rusak: jumlahRusak,
+                            },
+                            "rusak",
+                            rusakId
+                          );
+                        }
+                      });
+                    }
+
+                    const response = mapRow(rows3[0]);
+                    response.lokasi = lokasi.lokasi;
+                    response.lokasi_id = data.lokasi_id;
+
+                    res.status(201).json({
+                      message: "Data kerusakan ditambahkan",
+                      rusak: response,
+                    });
+                  }
+                );
+              }
+            );
+          });
+        };
+
+        if (username) {
+          getUserIdFromUsername(username, (errUser, userData) => {
+            insertRusak(errUser || !userData ? null : userData.id);
+          });
+        } else {
+          insertRusak(null);
+        }
+      }
+    );
   });
 });
 
