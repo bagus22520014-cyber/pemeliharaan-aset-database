@@ -9,6 +9,12 @@ import userRouter from "./routes/user.js";
 import perbaikanRouter from "./routes/perbaikan.js";
 import riwayatRouter from "./routes/riwayat.js";
 import notificationRouter from "./routes/notification.js";
+import rusakRouter from "./routes/rusak.js";
+import dipinjamRouter from "./routes/dipinjam.js";
+import dijualRouter from "./routes/dijual.js";
+import asetLokasiRouter from "./routes/asetLokasi.js";
+import bebanRouter from "./routes/beban.js";
+import departemenRouter from "./routes/departemen.js";
 
 const app = express();
 app.use(express.json());
@@ -33,6 +39,12 @@ app.use("/user", userRouter);
 app.use("/perbaikan", perbaikanRouter);
 app.use("/riwayat", riwayatRouter);
 app.use("/notification", notificationRouter);
+app.use("/rusak", rusakRouter);
+app.use("/dipinjam", dipinjamRouter);
+app.use("/dijual", dijualRouter);
+app.use("/aset-lokasi", asetLokasiRouter);
+app.use("/beban", bebanRouter);
+app.use("/departemen", departemenRouter);
 
 function printRoutes(app) {
   try {

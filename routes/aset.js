@@ -133,15 +133,31 @@ function mapRow(row) {
     NamaAset: row.NamaAset ?? null,
     Spesifikasi: row.Spesifikasi ?? null,
     Grup: row.Grup ?? null,
-    Beban: row.Beban ?? null,
+    beban_id: row.beban_id ?? null,
+    beban: row.beban_kode
+      ? {
+          id: row.beban_id,
+          kode: row.beban_kode,
+          aktif: row.beban_aktif === 1 || row.beban_aktif === true,
+        }
+      : null,
+    departemen_id: row.departemen_id ?? null,
+    departemen: row.departemen_kode
+      ? {
+          id: row.departemen_id,
+          kode: row.departemen_kode,
+          nama: row.departemen_nama,
+        }
+      : null,
     AkunPerkiraan: row.AkunPerkiraan ?? row.Akun_Perkiraan ?? null,
     NilaiAset: row.NilaiAset ?? null,
+    jumlah: row.jumlah ?? 1,
+    nilai_satuan: row.nilai_satuan ?? null,
     TglPembelian: formatDate(row.TglPembelian),
     MasaManfaat: row.MasaManfaat ?? null,
     StatusAset: row.StatusAset ?? row.Status ?? null,
     Pengguna: row.Pengguna ?? null,
     Lokasi: row.Lokasi ?? null,
-    Tempat: row.Tempat ?? null,
     // Prefer Keterangan; fallback to old Kekurangan column if present for compatibility
     Keterangan: row.Keterangan ?? row.Kekurangan ?? null,
     // Deprecated: Kekurangan column removed; use Keterangan instead
@@ -161,7 +177,14 @@ router.use((req, res, next) => {
 router.get("/", requireUserOrAdmin, (req, res) => {
   const role = getRoleFromRequest(req);
   if (role === "admin") {
-    const q = "SELECT * FROM aset";
+    const q = `
+      SELECT a.*, 
+        b.id as beban_id, b.kode as beban_kode, b.aktif as beban_aktif,
+        d.id as departemen_id, d.kode as departemen_kode, d.nama as departemen_nama
+      FROM aset a
+      LEFT JOIN beban b ON a.beban_id = b.id
+      LEFT JOIN departemen d ON a.departemen_id = d.id
+    `;
     db.query(q, (err, result) => {
       if (err) return res.status(500).json(err);
       res.json(result.map(mapRow));
@@ -174,11 +197,31 @@ router.get("/", requireUserOrAdmin, (req, res) => {
       .status(403)
       .json({ message: "Akses ditolak: beban tidak ditemukan" });
   }
-  const { clause, params } = buildBebanFilterSQL("Beban", bebanList);
-  const q = `SELECT * FROM aset WHERE ${clause}`;
-  db.query(q, params, (err, result) => {
-    if (err) return res.status(500).json(err);
-    res.json(result.map(mapRow));
+  // Get beban IDs from kode list
+  const placeholders = bebanList.map(() => "?").join(",");
+  const qBebanIds = `SELECT id FROM beban WHERE kode IN (${placeholders})`;
+  db.query(qBebanIds, bebanList, (errBeban, bebanRows) => {
+    if (errBeban) return res.status(500).json(errBeban);
+    const bebanIds = bebanRows.map((row) => row.id);
+    if (bebanIds.length === 0) {
+      return res
+        .status(403)
+        .json({ message: "Akses ditolak: beban tidak valid" });
+    }
+    const bebanPlaceholders = bebanIds.map(() => "?").join(",");
+    const q = `
+      SELECT a.*, 
+        b.id as beban_id, b.kode as beban_kode, b.aktif as beban_aktif,
+        d.id as departemen_id, d.kode as departemen_kode, d.nama as departemen_nama
+      FROM aset a
+      LEFT JOIN beban b ON a.beban_id = b.id
+      LEFT JOIN departemen d ON a.departemen_id = d.id
+      WHERE a.beban_id IN (${bebanPlaceholders})
+    `;
+    db.query(q, bebanIds, (err, result) => {
+      if (err) return res.status(500).json(err);
+      res.json(result.map(mapRow));
+    });
   });
 });
 
@@ -211,13 +254,19 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
       })}`
     );
   } catch (e) {}
+  // Calculate jumlah and nilai_satuan
+  const jumlah = data.jumlah ? parseInt(data.jumlah) : 1;
+  const nilaiAset = data.NilaiAset ? parseInt(data.NilaiAset) : null;
+  const nilaiSatuan =
+    nilaiAset && jumlah > 0 ? Math.floor(nilaiAset / jumlah) : null;
+
   console.log(
-    `[aset] insert values (AsetId, NamaAset, Beban, Gambar): ${data.AsetId},${data.NamaAset},${data.Beban},${fileName}`
+    `[aset] insert values (AsetId, NamaAset, beban_id, departemen_id, Gambar, jumlah, nilai_satuan): ${data.AsetId},${data.NamaAset},${data.beban_id},${data.departemen_id},${fileName},${jumlah},${nilaiSatuan}`
   );
   const q = `
     INSERT INTO aset 
-    (AsetId, AccurateId, NamaAset, Spesifikasi, Grup, Beban, AkunPerkiraan, NilaiAset, TglPembelian, MasaManfaat, Gambar, Keterangan, StatusAset, Pengguna, Lokasi, Tempat)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (AsetId, AccurateId, NamaAset, Spesifikasi, Grup, beban_id, departemen_id, AkunPerkiraan, NilaiAset, jumlah, nilai_satuan, TglPembelian, MasaManfaat, Gambar, Keterangan, StatusAset, Pengguna, Lokasi)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
@@ -226,9 +275,12 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
     data.NamaAset,
     data.Spesifikasi,
     data.Grup,
-    data.Beban,
+    data.beban_id || null,
+    data.departemen_id || null,
     data.AkunPerkiraan,
-    data.NilaiAset,
+    nilaiAset,
+    jumlah,
+    nilaiSatuan,
     data.TglPembelian,
     data.MasaManfaat,
     fileName,
@@ -236,7 +288,6 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
     data.StatusAset ?? null,
     data.Pengguna ?? null,
     data.Lokasi ?? null,
-    data.Tempat ?? null,
   ];
   try {
     console.log(`[aset] full values: ${JSON.stringify(values)}`);
@@ -258,11 +309,101 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
       }
     });
 
-    // Return the created asset for verification using insertId to avoid duplicates
-    db.query(
-      "SELECT * FROM aset WHERE id = ?",
-      [result.insertId],
-      (err2, rows2) => {
+    // Handle distribusi_lokasi if provided in request body
+    const distribusiLokasi = data.distribusi_lokasi;
+    if (
+      distribusiLokasi &&
+      Array.isArray(distribusiLokasi) &&
+      distribusiLokasi.length > 0
+    ) {
+      // Validate total allocation
+      const totalAllocated = distribusiLokasi.reduce(
+        (sum, loc) => sum + (parseInt(loc.jumlah) || 0),
+        0
+      );
+      if (totalAllocated > jumlah) {
+        return res.status(400).json({
+          message: `Total distribusi (${totalAllocated}) melebihi jumlah aset (${jumlah})`,
+        });
+      }
+
+      // Insert all locations
+      const qLokasi = `
+        INSERT INTO aset_lokasi (AsetId, beban, lokasi, jumlah, keterangan)
+        SELECT ?, b.kode, ?, ?, ?
+        FROM aset a
+        LEFT JOIN beban b ON a.beban_id = b.id
+        WHERE a.AsetId = ?
+      `;
+
+      let insertedCount = 0;
+      let insertErrors = [];
+
+      distribusiLokasi.forEach((loc, idx) => {
+        const lokasiValues = [
+          data.AsetId,
+          loc.lokasi,
+          parseInt(loc.jumlah) || 0,
+          loc.keterangan || null,
+          data.AsetId,
+        ];
+
+        db.query(qLokasi, lokasiValues, (errLok, resultLok) => {
+          if (errLok) {
+            insertErrors.push({ index: idx, error: errLok.message });
+          } else {
+            insertedCount++;
+          }
+
+          // Check if all locations processed
+          if (insertedCount + insertErrors.length === distribusiLokasi.length) {
+            // Return the created asset with distribution info
+            const qReturn = `
+              SELECT a.*, 
+                b.id as beban_id, b.kode as beban_kode, b.aktif as beban_aktif,
+                d.id as departemen_id, d.kode as departemen_kode, d.nama as departemen_nama
+              FROM aset a
+              LEFT JOIN beban b ON a.beban_id = b.id
+              LEFT JOIN departemen d ON a.departemen_id = d.id
+              WHERE a.id = ?
+            `;
+            db.query(qReturn, [result.insertId], (err2, rows2) => {
+              if (err2) return res.status(500).json(err2);
+              if (!rows2 || rows2.length === 0)
+                return res.status(201).json({
+                  message: "Aset ditambahkan, namun tidak dapat diambil",
+                });
+
+              const response = {
+                message: "Aset berhasil ditambahkan",
+                asset: mapRow(rows2[0]),
+                distribusi: {
+                  inserted: insertedCount,
+                  total: distribusiLokasi.length,
+                },
+              };
+
+              if (insertErrors.length > 0) {
+                response.distribusi.errors = insertErrors;
+              }
+
+              res.status(201).json(response);
+            });
+          }
+        });
+      });
+    } else {
+      // No distribution, return asset only
+      const qReturn = `
+        SELECT a.*, 
+          b.id as beban_id, b.kode as beban_kode, b.aktif as beban_aktif,
+          d.id as departemen_id, d.kode as departemen_kode, d.nama as departemen_nama
+        FROM aset a
+        LEFT JOIN beban b ON a.beban_id = b.id
+        LEFT JOIN departemen d ON a.departemen_id = d.id
+        WHERE a.id = ?
+      `;
+      db.query(qReturn, [result.insertId], (err2, rows2) => {
         if (err2) return res.status(500).json(err2);
         if (!rows2 || rows2.length === 0)
           return res
@@ -272,14 +413,22 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
           message: "Aset berhasil ditambahkan",
           asset: mapRow(rows2[0]),
         });
-      }
-    );
+      });
+    }
   });
 });
 
 router.get("/:id", requireUserOrAdmin, (req, res) => {
   const { id } = req.params;
-  const q = "SELECT * FROM aset WHERE AsetId = ?";
+  const q = `
+    SELECT a.*, 
+      b.id as beban_id, b.kode as beban_kode, b.aktif as beban_aktif,
+      d.id as departemen_id, d.kode as departemen_kode, d.nama as departemen_nama
+    FROM aset a
+    LEFT JOIN beban b ON a.beban_id = b.id
+    LEFT JOIN departemen d ON a.departemen_id = d.id
+    WHERE a.AsetId = ?
+  `;
   db.query(q, [id], (err, result) => {
     if (err) return res.status(500).json(err);
     if (!result || result.length === 0)
@@ -295,17 +444,88 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
     } catch (e) {}
     const asset = mapRow(result[0]);
     const role = getRoleFromRequest(req);
-    if (role === "admin") return res.json(asset);
+    if (role === "admin") {
+      // Fetch location distribution if exists
+      const lokasiQuery = `
+        SELECT id, lokasi, jumlah, keterangan, created_at, updated_at
+        FROM aset_lokasi
+        WHERE AsetId = ?
+        ORDER BY lokasi ASC
+      `;
+      db.query(lokasiQuery, [id], (errLokasi, lokasiRows) => {
+        if (errLokasi) {
+          console.error("[aset] Error fetching lokasi:", errLokasi);
+          return res.json(asset); // Return asset without lokasi info
+        }
+
+        if (lokasiRows && lokasiRows.length > 0) {
+          const totalAllocated = lokasiRows.reduce(
+            (sum, row) => sum + row.jumlah,
+            0
+          );
+          asset.distribusi_lokasi = {
+            total_allocated: totalAllocated,
+            available: asset.jumlah - totalAllocated,
+            locations: lokasiRows.map((row) => ({
+              id: row.id,
+              lokasi: row.lokasi,
+              jumlah: row.jumlah,
+              keterangan: row.keterangan || null,
+              created_at: row.created_at,
+              updated_at: row.updated_at,
+            })),
+          };
+        }
+
+        return res.json(asset);
+      });
+      return;
+    }
     const bebanList = getBebanListFromRequest(req);
     if (!bebanList || bebanList.length === 0) {
       return res
         .status(403)
         .json({ message: "Akses ditolak: beban tidak ditemukan" });
     }
-    if (!isSameLocation(asset.Beban ?? "", bebanList)) {
+    const assetBebanKode = asset.beban?.kode || "";
+    if (!isSameLocation(assetBebanKode, bebanList)) {
       return res.status(404).json({ message: "Aset tidak ditemukan" });
     }
-    res.json(asset);
+
+    // Fetch location distribution for user role too
+    const lokasiQuery = `
+      SELECT id, lokasi, jumlah, keterangan, created_at, updated_at
+      FROM aset_lokasi
+      WHERE AsetId = ?
+      ORDER BY lokasi ASC
+    `;
+    db.query(lokasiQuery, [id], (errLokasi, lokasiRows) => {
+      if (errLokasi) {
+        console.error("[aset] Error fetching lokasi:", errLokasi);
+        return res.json(asset); // Return asset without lokasi info
+      }
+
+      if (lokasiRows && lokasiRows.length > 0) {
+        const totalAllocated = lokasiRows.reduce(
+          (sum, row) => sum + row.jumlah,
+          0
+        );
+        asset.distribusi_lokasi = {
+          total_allocated: totalAllocated,
+          available: asset.jumlah - totalAllocated,
+          locations: lokasiRows.map((row) => ({
+            id: row.id,
+            lokasi: row.lokasi,
+            jumlah: row.jumlah,
+            keterangan: row.keterangan || null,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+          })),
+        };
+      }
+
+      res.json(asset);
+    });
   });
 });
 
@@ -325,26 +545,39 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
 
     const current = rows[0];
     const oldGambar = current.Gambar ?? null;
+
+    // Calculate nilai_satuan if NilaiAset or jumlah is being updated
+    let nilaiSatuan = null;
+    const newNilaiAset = data.NilaiAset
+      ? parseInt(data.NilaiAset)
+      : current.NilaiAset;
+    const newJumlah = data.jumlah ? parseInt(data.jumlah) : current.jumlah || 1;
+    if (newNilaiAset && newJumlah > 0) {
+      nilaiSatuan = Math.floor(newNilaiAset / newJumlah);
+    }
+
     const values = [
       data.AccurateId,
       data.NamaAset,
       data.Spesifikasi,
       data.Grup,
-      data.Beban,
+      data.beban_id,
+      data.departemen_id,
       data.AkunPerkiraan,
       data.NilaiAset,
+      data.jumlah,
+      nilaiSatuan,
       data.TglPembelian,
       data.MasaManfaat,
       data.StatusAset,
       data.Pengguna,
       data.Lokasi,
-      data.Tempat,
       data.Keterangan,
       data.Gambar ?? null,
       id,
     ];
 
-    const q = `UPDATE aset SET AccurateId = COALESCE(?, AccurateId), NamaAset = COALESCE(?, NamaAset), Spesifikasi = COALESCE(?, Spesifikasi), Grup = COALESCE(?, Grup), Beban = COALESCE(?, Beban), AkunPerkiraan = COALESCE(?, AkunPerkiraan), NilaiAset = COALESCE(?, NilaiAset), TglPembelian = COALESCE(?, TglPembelian), MasaManfaat = COALESCE(?, MasaManfaat), StatusAset = COALESCE(?, StatusAset), Pengguna = COALESCE(?, Pengguna), Lokasi = COALESCE(?, Lokasi), Tempat = COALESCE(?, Tempat), Keterangan = COALESCE(?, Keterangan), Gambar = COALESCE(?, Gambar) WHERE AsetId = ?`;
+    const q = `UPDATE aset SET AccurateId = COALESCE(?, AccurateId), NamaAset = COALESCE(?, NamaAset), Spesifikasi = COALESCE(?, Spesifikasi), Grup = COALESCE(?, Grup), beban_id = COALESCE(?, beban_id), departemen_id = COALESCE(?, departemen_id), AkunPerkiraan = COALESCE(?, AkunPerkiraan), NilaiAset = COALESCE(?, NilaiAset), jumlah = COALESCE(?, jumlah), nilai_satuan = COALESCE(?, nilai_satuan), TglPembelian = COALESCE(?, TglPembelian), MasaManfaat = COALESCE(?, MasaManfaat), StatusAset = COALESCE(?, StatusAset), Pengguna = COALESCE(?, Pengguna), Lokasi = COALESCE(?, Lokasi), Keterangan = COALESCE(?, Keterangan), Gambar = COALESCE(?, Gambar) WHERE AsetId = ?`;
     try {
       console.log(`[aset] PUT req.body: ${JSON.stringify(data)}`);
       console.log(
@@ -446,8 +679,17 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
           }
         }
       );
-      // Return updated row
-      db.query("SELECT * FROM aset WHERE AsetId = ?", [id], (err3, rows2) => {
+      // Return updated row with JOIN
+      const qReturn = `
+        SELECT a.*, 
+          b.id as beban_id, b.kode as beban_kode, b.aktif as beban_aktif,
+          d.id as departemen_id, d.kode as departemen_kode, d.nama as departemen_nama
+        FROM aset a
+        LEFT JOIN beban b ON a.beban_id = b.id
+        LEFT JOIN departemen d ON a.departemen_id = d.id
+        WHERE a.AsetId = ?
+      `;
+      db.query(qReturn, [id], (err3, rows2) => {
         if (err3) return res.status(500).json(err3);
         if (!rows2 || rows2.length === 0)
           return res

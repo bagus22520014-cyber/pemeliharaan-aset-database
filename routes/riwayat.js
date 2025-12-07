@@ -19,10 +19,12 @@ router.get("/", requireUserOrAdmin, (req, res) => {
   let q = `
     SELECT r.*, 
            u.username, 
-           a.AsetId, a.NamaAset, a.Beban
+           a.AsetId, a.NamaAset, 
+           b.kode as beban_kode
     FROM riwayat r
     LEFT JOIN user u ON r.user_id = u.id
     LEFT JOIN aset a ON r.aset_id = a.id
+    LEFT JOIN beban b ON a.beban_id = b.id
   `;
 
   const conditions = [];
@@ -36,7 +38,7 @@ router.get("/", requireUserOrAdmin, (req, res) => {
         .json({ message: "Akses ditolak: beban tidak ditemukan" });
     }
     const { clause, params: bebanParams } = buildBebanFilterSQL(
-      "a.Beban",
+      "b.kode",
       beban
     );
     conditions.push(`(${clause})`);
@@ -62,7 +64,7 @@ router.get("/", requireUserOrAdmin, (req, res) => {
     q += " WHERE " + conditions.join(" AND ");
   }
 
-  q += " ORDER BY r.waktu DESC";
+  q += " ORDER BY r.created_at DESC";
 
   if (limit) {
     q += " LIMIT ?";
@@ -89,7 +91,8 @@ router.get("/", requireUserOrAdmin, (req, res) => {
           ? JSON.parse(row.perubahan)
           : row.perubahan
         : null,
-      waktu: row.waktu,
+      created_at: row.created_at,
+      waktu: row.waktu || row.created_at,
     }));
 
     res.json(mapped);
@@ -108,7 +111,7 @@ router.get("/aset/:asetId", requireUserOrAdmin, (req, res) => {
     LEFT JOIN user u ON r.user_id = u.id
     LEFT JOIN aset a ON r.aset_id = a.id
     WHERE a.AsetId = ?
-    ORDER BY r.waktu DESC
+    ORDER BY r.created_at DESC
   `;
 
   db.query(q, [asetId], (err, result) => {
@@ -130,7 +133,8 @@ router.get("/aset/:asetId", requireUserOrAdmin, (req, res) => {
           ? JSON.parse(row.perubahan)
           : row.perubahan
         : null,
-      waktu: row.waktu,
+      created_at: row.created_at,
+      waktu: row.waktu || row.created_at,
     }));
 
     res.json(mapped);
@@ -149,7 +153,7 @@ router.get("/user/:username", requireAdmin, (req, res) => {
     LEFT JOIN user u ON r.user_id = u.id
     LEFT JOIN aset a ON r.aset_id = a.id
     WHERE u.username = ?
-    ORDER BY r.waktu DESC
+    ORDER BY r.created_at DESC
   `;
 
   db.query(q, [username], (err, result) => {
@@ -171,7 +175,8 @@ router.get("/user/:username", requireAdmin, (req, res) => {
           ? JSON.parse(row.perubahan)
           : row.perubahan
         : null,
-      waktu: row.waktu,
+      created_at: row.created_at,
+      waktu: row.waktu || row.created_at,
     }));
 
     res.json(mapped);
