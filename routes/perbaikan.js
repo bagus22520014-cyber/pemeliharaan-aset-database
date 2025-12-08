@@ -105,7 +105,6 @@ function mapRow(r) {
     deskripsi: r.deskripsi ?? null,
     biaya: r.biaya ?? null,
     teknisi: r.teknisi ?? null,
-    status: r.status ?? null,
   };
 }
 
@@ -269,15 +268,10 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
 // Create perbaikan (user or admin). Check asset Beban for user.
 router.post("/", requireUserOrAdmin, (req, res) => {
   const data = req.body;
-  if (
-    !data ||
-    !data.AsetId ||
-    !(data.tanggal_perbaikan || data.tanggal) ||
-    !data.lokasi_id
-  ) {
+  if (!data || !data.AsetId || !(data.tanggal_perbaikan || data.tanggal)) {
     return res
       .status(400)
-      .json({ message: "AsetId, tanggal_perbaikan, dan lokasi_id diperlukan" });
+      .json({ message: "AsetId dan tanggal_perbaikan diperlukan" });
   }
   const role = getRoleFromRequest(req);
   const beban = getBebanListFromRequest(req);
@@ -299,127 +293,87 @@ router.post("/", requireUserOrAdmin, (req, res) => {
         .json({ message: "Akses ditolak: tidak punya akses ke Aset ini" });
     }
 
-    // Check lokasi exists and has enough stock
-    db.query(
-      "SELECT * FROM aset_lokasi WHERE id = ? AND AsetId = ?",
-      [data.lokasi_id, data.AsetId],
-      (errLok, lokasiRows) => {
-        if (errLok) return res.status(500).json(errLok);
-        if (!lokasiRows || lokasiRows.length === 0) {
-          return res.status(404).json({ message: "Lokasi tidak ditemukan" });
-        }
-        const lokasi = lokasiRows[0];
-        if (lokasi.jumlah < 1) {
-          return res
-            .status(400)
-            .json({ message: "Stok di lokasi tidak mencukupi" });
-        }
+    const username = req.cookies?.username || req.headers["x-username"];
 
-        const username = req.cookies?.username || req.headers["x-username"];
+    const insertPerbaikan = () => {
+      const q = `INSERT INTO perbaikan (aset_id, tanggal_perbaikan, deskripsi, biaya, teknisi) VALUES (?, ?, ?, ?, ?)`;
+      const vals = [
+        asetDbId,
+        data.tanggal_perbaikan || data.tanggal,
+        data.deskripsi ?? null,
+        data.biaya ?? null,
+        data.teknisi ?? null,
+      ];
+      db.query(q, vals, (err2, result) => {
+        if (err2) return res.status(500).json(err2);
 
-        const insertPerbaikan = () => {
-          const q = `INSERT INTO perbaikan (aset_id, tanggal_perbaikan, deskripsi, biaya, teknisi, status, lokasi_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
-          const vals = [
-            asetDbId,
-            data.tanggal_perbaikan || data.tanggal,
-            data.deskripsi ?? null,
-            data.biaya ?? null,
-            data.teknisi ?? null,
-            data.status ?? "pending",
-            data.lokasi_id,
-          ];
-          db.query(q, vals, (err2, result) => {
-            if (err2) return res.status(500).json(err2);
+        const perbaikanId = result.insertId;
 
-            const perbaikanId = result.insertId;
+        // Update StatusAset to 'diperbaiki'
+        db.query(
+          "UPDATE aset SET StatusAset = 'diperbaiki' WHERE AsetId = ?",
+          [data.AsetId],
+          (errUpdate) => {
+            if (errUpdate) {
+              console.error("[perbaikan] Error updating aset:", errUpdate);
+            } else {
+              console.log(
+                `[perbaikan] Set StatusAset='diperbaiki' for AsetId=${data.AsetId}`
+              );
+            }
+          }
+        );
 
-            // Decrease lokasi jumlah by 1
-            db.query(
-              "UPDATE aset_lokasi SET jumlah = GREATEST(jumlah - 1, 0) WHERE id = ?",
-              [data.lokasi_id],
-              (errUpdateLok) => {
-                if (errUpdateLok) {
-                  console.error(
-                    "[perbaikan] Error updating lokasi:",
-                    errUpdateLok
+        db.query(
+          "SELECT p.*, a.AsetId, a.NamaAset FROM perbaikan p LEFT JOIN aset a ON p.aset_id = a.id WHERE p.id = ?",
+          [perbaikanId],
+          (err3, rows3) => {
+            if (err3) return res.status(500).json(err3);
+
+            // Log riwayat
+            if (username) {
+              getUserIdFromUsername(username, (err4, userData) => {
+                if (!err4 && userData) {
+                  logRiwayat(
+                    "perbaikan_input",
+                    userData.id,
+                    userData.role,
+                    asetDbId,
+                    {
+                      tanggal_perbaikan: data.tanggal_perbaikan || data.tanggal,
+                      deskripsi: data.deskripsi,
+                      biaya: data.biaya,
+                      teknisi: data.teknisi,
+                    },
+                    "perbaikan",
+                    perbaikanId
                   );
-                  return res.status(500).json(errUpdateLok);
+
+                  // Create notification for the beban
+                  createNotification(
+                    null, // broadcast to beban
+                    asetBeban,
+                    "info",
+                    "Perbaikan Baru Ditambahkan",
+                    `Perbaikan untuk aset ${data.AsetId} telah ditambahkan oleh ${username}`,
+                    `/perbaikan/${perbaikanId}`,
+                    "perbaikan",
+                    perbaikanId
+                  );
                 }
+              });
+            }
 
-                // Update total jumlah in aset based on sum of lokasi
-                db.query(
-                  "UPDATE aset SET jumlah = (SELECT COALESCE(SUM(jumlah), 0) FROM aset_lokasi WHERE AsetId = ?), StatusAset = 'diperbaiki' WHERE AsetId = ?",
-                  [data.AsetId, data.AsetId],
-                  (errUpdate) => {
-                    if (errUpdate) {
-                      console.error(
-                        "[perbaikan] Error updating aset:",
-                        errUpdate
-                      );
-                    } else {
-                      console.log(
-                        `[perbaikan] Decreased jumlah from lokasi_id=${data.lokasi_id} and set StatusAset='diperbaiki' for AsetId=${data.AsetId}`
-                      );
-                    }
-                  }
-                );
+            res.status(201).json({
+              message: "Perbaikan ditambahkan",
+              perbaikan: mapRow(rows3[0]),
+            });
+          }
+        );
+      });
+    };
 
-                db.query(
-                  "SELECT p.*, a.AsetId, a.NamaAset, al.lokasi FROM perbaikan p LEFT JOIN aset a ON p.aset_id = a.id LEFT JOIN aset_lokasi al ON p.lokasi_id = al.id WHERE p.id = ?",
-                  [perbaikanId],
-                  (err3, rows3) => {
-                    if (err3) return res.status(500).json(err3);
-
-                    // Log riwayat
-                    if (username) {
-                      getUserIdFromUsername(username, (err4, userData) => {
-                        if (!err4 && userData) {
-                          logRiwayat(
-                            "perbaikan_input",
-                            userData.id,
-                            userData.role,
-                            asetDbId,
-                            {
-                              lokasi: lokasi.lokasi,
-                              lokasi_id: data.lokasi_id,
-                            },
-                            "perbaikan",
-                            perbaikanId
-                          );
-
-                          // Create notification for the beban
-                          createNotification(
-                            null, // broadcast to beban
-                            asetBeban,
-                            "info",
-                            "Perbaikan Baru Ditambahkan",
-                            `Perbaikan untuk aset ${data.AsetId} dari lokasi ${lokasi.lokasi} telah ditambahkan oleh ${username}`,
-                            `/perbaikan/${perbaikanId}`,
-                            "perbaikan",
-                            perbaikanId
-                          );
-                        }
-                      });
-                    }
-
-                    const response = mapRow(rows3[0]);
-                    response.lokasi = lokasi.lokasi;
-                    response.lokasi_id = data.lokasi_id;
-
-                    res.status(201).json({
-                      message: "Perbaikan ditambahkan",
-                      perbaikan: response,
-                    });
-                  }
-                );
-              }
-            );
-          });
-        };
-
-        insertPerbaikan();
-      }
-    );
+    insertPerbaikan();
   });
 });
 

@@ -67,8 +67,6 @@ function mapRow(r) {
     Peminjam: r.Peminjam ?? null,
     TglPinjam: formatDate(r.TglPinjam),
     TglKembali: formatDate(r.TglKembali),
-    jumlah_dipinjam: r.jumlah_dipinjam ?? null,
-    StatusPeminjaman: r.StatusPeminjaman ?? null,
     catatan: r.catatan ?? null,
   };
 }
@@ -168,16 +166,10 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
 // POST create
 router.post("/", requireUserOrAdmin, (req, res) => {
   const data = req.body;
-  if (
-    !data ||
-    !data.AsetId ||
-    !data.tanggal_pinjam ||
-    !data.peminjam ||
-    !data.lokasi_id
-  ) {
-    return res.status(400).json({
-      message: "AsetId, tanggal_pinjam, peminjam, dan lokasi_id diperlukan",
-    });
+  if (!data || !data.AsetId || !data.tanggal_pinjam || !data.peminjam) {
+    return res
+      .status(400)
+      .json({ message: "AsetId, tanggal_pinjam, dan peminjam diperlukan" });
   }
   const role = getRoleFromRequest(req);
   const beban = getBebanListFromRequest(req);
@@ -195,127 +187,82 @@ router.post("/", requireUserOrAdmin, (req, res) => {
     }
 
     const asetDbId = rows[0].id;
-    const jumlahDipinjam = parseInt(data.jumlah_dipinjam) || 1;
 
-    // Check lokasi exists and has enough stock
-    db.query(
-      "SELECT * FROM aset_lokasi WHERE id = ? AND AsetId = ?",
-      [data.lokasi_id, data.AsetId],
-      (errLok, lokasiRows) => {
-        if (errLok) return res.status(500).json(errLok);
-        if (!lokasiRows || lokasiRows.length === 0) {
-          return res.status(404).json({ message: "Lokasi tidak ditemukan" });
-        }
-        const lokasi = lokasiRows[0];
-        if (lokasi.jumlah < jumlahDipinjam) {
-          return res.status(400).json({
-            message: "Stok di lokasi tidak mencukupi",
-            available: lokasi.jumlah,
-            requested: jumlahDipinjam,
-          });
-        }
+    const username = req.cookies?.username || req.headers["x-username"];
 
-        const username = req.cookies?.username || req.headers["x-username"];
+    const insertDipinjam = (uid) => {
+      const q = `INSERT INTO dipinjam (aset_id, Peminjam, TglPinjam, TglKembali, catatan) VALUES (?, ?, ?, ?, ?)`;
+      const vals = [
+        asetDbId,
+        data.peminjam,
+        data.tanggal_pinjam,
+        data.tanggal_kembali ?? null,
+        data.keperluan ?? data.catatan ?? null,
+      ];
+      db.query(q, vals, (err2, result) => {
+        if (err2) return res.status(500).json(err2);
 
-        const insertDipinjam = (uid) => {
-          const q = `INSERT INTO dipinjam (aset_id, Peminjam, TglPinjam, TglKembali, jumlah_dipinjam, StatusPeminjaman, catatan, lokasi_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
-          const vals = [
-            asetDbId,
-            data.peminjam,
-            data.tanggal_pinjam,
-            data.tanggal_kembali ?? null,
-            jumlahDipinjam,
-            data.status ?? "dipinjam",
-            data.keperluan ?? data.catatan ?? null,
-            data.lokasi_id,
-          ];
-          db.query(q, vals, (err2, result) => {
-            if (err2) return res.status(500).json(err2);
+        const dipinjamId = result.insertId;
 
-            const dipinjamId = result.insertId;
+        // Update StatusAset to 'dipinjam'
+        db.query(
+          "UPDATE aset SET StatusAset = 'dipinjam' WHERE AsetId = ?",
+          [data.AsetId],
+          (errUpdate) => {
+            if (errUpdate) {
+              console.error("[dipinjam] Error updating aset:", errUpdate);
+            } else {
+              console.log(
+                `[dipinjam] Set StatusAset='dipinjam' for AsetId=${data.AsetId}`
+              );
+            }
+          }
+        );
 
-            // Decrease lokasi jumlah
-            db.query(
-              "UPDATE aset_lokasi SET jumlah = GREATEST(jumlah - ?, 0) WHERE id = ?",
-              [jumlahDipinjam, data.lokasi_id],
-              (errUpdateLok) => {
-                if (errUpdateLok) {
-                  console.error(
-                    "[dipinjam] Error updating lokasi:",
-                    errUpdateLok
+        db.query(
+          "SELECT d.*, a.AsetId, a.NamaAset FROM dipinjam d LEFT JOIN aset a ON d.aset_id = a.id WHERE d.id = ?",
+          [dipinjamId],
+          (err3, rows3) => {
+            if (err3) return res.status(500).json(err3);
+
+            // Log riwayat
+            if (username) {
+              getUserIdFromUsername(username, (err4, userData) => {
+                if (!err4 && userData) {
+                  logRiwayat(
+                    "dipinjam_input",
+                    userData.id,
+                    userData.role,
+                    asetDbId,
+                    {
+                      Peminjam: data.peminjam,
+                      TglPinjam: data.tanggal_pinjam,
+                      TglKembali: data.tanggal_kembali,
+                      catatan: data.keperluan ?? data.catatan,
+                    },
+                    "dipinjam",
+                    dipinjamId
                   );
-                  return res.status(500).json(errUpdateLok);
                 }
+              });
+            }
 
-                // Update total jumlah in aset based on sum of lokasi
-                db.query(
-                  "UPDATE aset SET jumlah = (SELECT COALESCE(SUM(jumlah), 0) FROM aset_lokasi WHERE AsetId = ?), StatusAset = 'dipinjam' WHERE AsetId = ?",
-                  [data.AsetId, data.AsetId],
-                  (errUpdate) => {
-                    if (errUpdate) {
-                      console.error(
-                        "[dipinjam] Error updating aset:",
-                        errUpdate
-                      );
-                    } else {
-                      console.log(
-                        `[dipinjam] Decreased jumlah by ${jumlahDipinjam} from lokasi_id=${data.lokasi_id} and set StatusAset='dipinjam' for AsetId=${data.AsetId}`
-                      );
-                    }
-                  }
-                );
+            res.status(201).json({
+              message: "Data peminjaman ditambahkan",
+              dipinjam: mapRow(rows3[0]),
+            });
+          }
+        );
+      });
+    };
 
-                db.query(
-                  "SELECT d.*, a.AsetId, a.NamaAset, al.lokasi FROM dipinjam d LEFT JOIN aset a ON d.aset_id = a.id LEFT JOIN aset_lokasi al ON d.lokasi_id = al.id WHERE d.id = ?",
-                  [dipinjamId],
-                  (err3, rows3) => {
-                    if (err3) return res.status(500).json(err3);
-
-                    // Log riwayat
-                    if (username) {
-                      getUserIdFromUsername(username, (err4, userData) => {
-                        if (!err4 && userData) {
-                          logRiwayat(
-                            "dipinjam_input",
-                            userData.id,
-                            userData.role,
-                            asetDbId,
-                            {
-                              lokasi: lokasi.lokasi,
-                              lokasi_id: data.lokasi_id,
-                              jumlah_dipinjam: jumlahDipinjam,
-                            },
-                            "dipinjam",
-                            dipinjamId
-                          );
-                        }
-                      });
-                    }
-
-                    const response = mapRow(rows3[0]);
-                    response.lokasi = lokasi.lokasi;
-                    response.lokasi_id = data.lokasi_id;
-
-                    res.status(201).json({
-                      message: "Data peminjaman ditambahkan",
-                      dipinjam: response,
-                    });
-                  }
-                );
-              }
-            );
-          });
-        };
-
-        if (username) {
-          getUserIdFromUsername(username, (errUser, userData) => {
-            insertDipinjam(errUser || !userData ? null : userData.id);
-          });
-        } else {
-          insertDipinjam(null);
-        }
-      }
-    );
+    if (username) {
+      getUserIdFromUsername(username, (errUser, userData) => {
+        insertDipinjam(errUser || !userData ? null : userData.id);
+      });
+    } else {
+      insertDipinjam(null);
+    }
   });
 });
 

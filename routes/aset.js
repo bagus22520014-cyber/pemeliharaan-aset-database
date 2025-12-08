@@ -151,8 +151,6 @@ function mapRow(row) {
       : null,
     AkunPerkiraan: row.AkunPerkiraan ?? row.Akun_Perkiraan ?? null,
     NilaiAset: row.NilaiAset ?? null,
-    jumlah: row.jumlah ?? 1,
-    nilai_satuan: row.nilai_satuan ?? null,
     TglPembelian: formatDate(row.TglPembelian),
     MasaManfaat: row.MasaManfaat ?? null,
     StatusAset: row.StatusAset ?? row.Status ?? null,
@@ -254,19 +252,14 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
       })}`
     );
   } catch (e) {}
-  // Calculate jumlah and nilai_satuan
-  const jumlah = data.jumlah ? parseInt(data.jumlah) : 1;
-  const nilaiAset = data.NilaiAset ? parseInt(data.NilaiAset) : null;
-  const nilaiSatuan =
-    nilaiAset && jumlah > 0 ? Math.floor(nilaiAset / jumlah) : null;
 
   console.log(
-    `[aset] insert values (AsetId, NamaAset, beban_id, departemen_id, Gambar, jumlah, nilai_satuan): ${data.AsetId},${data.NamaAset},${data.beban_id},${data.departemen_id},${fileName},${jumlah},${nilaiSatuan}`
+    `[aset] insert values (AsetId, NamaAset, beban_id, departemen_id, Gambar): ${data.AsetId},${data.NamaAset},${data.beban_id},${data.departemen_id},${fileName}`
   );
   const q = `
     INSERT INTO aset 
-    (AsetId, AccurateId, NamaAset, Spesifikasi, Grup, beban_id, departemen_id, AkunPerkiraan, NilaiAset, jumlah, nilai_satuan, TglPembelian, MasaManfaat, Gambar, Keterangan, StatusAset, Pengguna, Lokasi)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (AsetId, AccurateId, NamaAset, Spesifikasi, Grup, beban_id, departemen_id, AkunPerkiraan, NilaiAset, TglPembelian, MasaManfaat, Gambar, Keterangan, StatusAset, Pengguna, Lokasi)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
@@ -278,9 +271,7 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
     data.beban_id || null,
     data.departemen_id || null,
     data.AkunPerkiraan,
-    nilaiAset,
-    jumlah,
-    nilaiSatuan,
+    data.NilaiAset || null,
     data.TglPembelian,
     data.MasaManfaat,
     fileName,
@@ -546,16 +537,6 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
     const current = rows[0];
     const oldGambar = current.Gambar ?? null;
 
-    // Calculate nilai_satuan if NilaiAset or jumlah is being updated
-    let nilaiSatuan = null;
-    const newNilaiAset = data.NilaiAset
-      ? parseInt(data.NilaiAset)
-      : current.NilaiAset;
-    const newJumlah = data.jumlah ? parseInt(data.jumlah) : current.jumlah || 1;
-    if (newNilaiAset && newJumlah > 0) {
-      nilaiSatuan = Math.floor(newNilaiAset / newJumlah);
-    }
-
     const values = [
       data.AccurateId,
       data.NamaAset,
@@ -565,8 +546,6 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
       data.departemen_id,
       data.AkunPerkiraan,
       data.NilaiAset,
-      data.jumlah,
-      nilaiSatuan,
       data.TglPembelian,
       data.MasaManfaat,
       data.StatusAset,
@@ -577,7 +556,7 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
       id,
     ];
 
-    const q = `UPDATE aset SET AccurateId = COALESCE(?, AccurateId), NamaAset = COALESCE(?, NamaAset), Spesifikasi = COALESCE(?, Spesifikasi), Grup = COALESCE(?, Grup), beban_id = COALESCE(?, beban_id), departemen_id = COALESCE(?, departemen_id), AkunPerkiraan = COALESCE(?, AkunPerkiraan), NilaiAset = COALESCE(?, NilaiAset), jumlah = COALESCE(?, jumlah), nilai_satuan = COALESCE(?, nilai_satuan), TglPembelian = COALESCE(?, TglPembelian), MasaManfaat = COALESCE(?, MasaManfaat), StatusAset = COALESCE(?, StatusAset), Pengguna = COALESCE(?, Pengguna), Lokasi = COALESCE(?, Lokasi), Keterangan = COALESCE(?, Keterangan), Gambar = COALESCE(?, Gambar) WHERE AsetId = ?`;
+    const q = `UPDATE aset SET AccurateId = COALESCE(?, AccurateId), NamaAset = COALESCE(?, NamaAset), Spesifikasi = COALESCE(?, Spesifikasi), Grup = COALESCE(?, Grup), beban_id = COALESCE(?, beban_id), departemen_id = COALESCE(?, departemen_id), AkunPerkiraan = COALESCE(?, AkunPerkiraan), NilaiAset = COALESCE(?, NilaiAset), TglPembelian = COALESCE(?, TglPembelian), MasaManfaat = COALESCE(?, MasaManfaat), StatusAset = COALESCE(?, StatusAset), Pengguna = COALESCE(?, Pengguna), Lokasi = COALESCE(?, Lokasi), Keterangan = COALESCE(?, Keterangan), Gambar = COALESCE(?, Gambar) WHERE AsetId = ?`;
     try {
       console.log(`[aset] PUT req.body: ${JSON.stringify(data)}`);
       console.log(
@@ -649,7 +628,13 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
               }
             }
           });
-          if (Object.keys(perubahan).length > 0) {
+          
+          // Skip logging if only departemen_id and/or Lokasi changed (usually from mutasi)
+          const changedKeys = Object.keys(perubahan);
+          const isOnlyLocationChange = changedKeys.length > 0 && 
+            changedKeys.every(key => key === 'Lokasi' || key === 'departemen_id');
+          
+          if (Object.keys(perubahan).length > 0 && !isOnlyLocationChange) {
             logRiwayat("edit", user.id, user.role, current.id, perubahan);
           }
         }

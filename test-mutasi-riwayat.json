@@ -1,0 +1,8 @@
+{
+  "aset_id": 128,
+  "TglMutasi": "2025-12-08",
+  "departemen_tujuan_id": 2,
+  "ruangan_tujuan": "Test Room",
+  "alasan": "Testing riwayat mutasi - hanya 1",
+  "catatan": "Harusnya hanya 1 riwayat"
+}

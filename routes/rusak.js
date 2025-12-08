@@ -66,8 +66,6 @@ function mapRow(r) {
     NamaAset: r.NamaAset ?? null,
     TglRusak: formatDate(r.TglRusak),
     Kerusakan: r.Kerusakan ?? null,
-    jumlah_rusak: r.jumlah_rusak ?? null,
-    StatusRusak: r.StatusRusak ?? null,
     catatan: r.catatan ?? null,
   };
 }
@@ -163,10 +161,10 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
 // POST create
 router.post("/", requireUserOrAdmin, (req, res) => {
   const data = req.body;
-  if (!data || !data.AsetId || !data.TglRusak || !data.lokasi_id) {
+  if (!data || !data.AsetId || !data.TglRusak) {
     return res
       .status(400)
-      .json({ message: "AsetId, TglRusak, dan lokasi_id diperlukan" });
+      .json({ message: "AsetId dan TglRusak diperlukan" });
   }
   const role = getRoleFromRequest(req);
   const beban = getBebanListFromRequest(req);
@@ -184,120 +182,79 @@ router.post("/", requireUserOrAdmin, (req, res) => {
         .json({ message: "Akses ditolak: tidak punya akses ke Aset ini" });
     }
 
-    const jumlahRusak = parseInt(data.jumlah_rusak) || 1;
+    const username = req.cookies?.username || req.headers["x-username"];
 
-    // Check lokasi exists and has enough stock
-    db.query(
-      "SELECT * FROM aset_lokasi WHERE id = ? AND AsetId = ?",
-      [data.lokasi_id, data.AsetId],
-      (errLok, lokasiRows) => {
-        if (errLok) return res.status(500).json(errLok);
-        if (!lokasiRows || lokasiRows.length === 0) {
-          return res.status(404).json({ message: "Lokasi tidak ditemukan" });
-        }
-        const lokasi = lokasiRows[0];
-        if (lokasi.jumlah < jumlahRusak) {
-          return res.status(400).json({
-            message: "Stok di lokasi tidak mencukupi",
-            available: lokasi.jumlah,
-            requested: jumlahRusak,
-          });
-        }
+    const insertRusak = (uid) => {
+      const q = `INSERT INTO rusak (aset_id, TglRusak, Kerusakan, catatan) VALUES (?, ?, ?, ?)`;
+      const vals = [
+        asetDbId,
+        data.TglRusak,
+        data.Kerusakan ?? null,
+        data.catatan ?? null,
+      ];
+      db.query(q, vals, (err2, result) => {
+        if (err2) return res.status(500).json(err2);
 
-        const username = req.cookies?.username || req.headers["x-username"];
+        const rusakId = result.insertId;
 
-        const insertRusak = (uid) => {
-          const q = `INSERT INTO rusak (aset_id, TglRusak, Kerusakan, jumlah_rusak, StatusRusak, catatan, lokasi_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
-          const vals = [
-            asetDbId,
-            data.TglRusak,
-            data.Kerusakan ?? null,
-            jumlahRusak,
-            data.StatusRusak ?? "temporary",
-            data.catatan ?? null,
-            data.lokasi_id,
-          ];
-          db.query(q, vals, (err2, result) => {
-            if (err2) return res.status(500).json(err2);
+        // Update StatusAset to 'rusak'
+        db.query(
+          "UPDATE aset SET StatusAset = 'rusak' WHERE AsetId = ?",
+          [data.AsetId],
+          (errUpdate) => {
+            if (errUpdate) {
+              console.error("[rusak] Error updating aset:", errUpdate);
+            } else {
+              console.log(
+                `[rusak] Set StatusAset='rusak' for AsetId=${data.AsetId}`
+              );
+            }
+          }
+        );
 
-            const rusakId = result.insertId;
+        db.query(
+          "SELECT r.*, a.AsetId, a.NamaAset FROM rusak r LEFT JOIN aset a ON r.aset_id = a.id WHERE r.id = ?",
+          [rusakId],
+          (err3, rows3) => {
+            if (err3) return res.status(500).json(err3);
 
-            // Decrease lokasi jumlah
-            db.query(
-              "UPDATE aset_lokasi SET jumlah = GREATEST(jumlah - ?, 0) WHERE id = ?",
-              [jumlahRusak, data.lokasi_id],
-              (errUpdateLok) => {
-                if (errUpdateLok) {
-                  console.error("[rusak] Error updating lokasi:", errUpdateLok);
-                  return res.status(500).json(errUpdateLok);
+            // Log riwayat
+            if (username) {
+              getUserIdFromUsername(username, (err4, userData) => {
+                if (!err4 && userData) {
+                  logRiwayat(
+                    "rusak_input",
+                    userData.id,
+                    userData.role,
+                    asetDbId,
+                    {
+                      TglRusak: data.TglRusak,
+                      Kerusakan: data.Kerusakan,
+                      catatan: data.catatan,
+                    },
+                    "rusak",
+                    rusakId
+                  );
                 }
+              });
+            }
 
-                // Update total jumlah in aset based on sum of lokasi
-                db.query(
-                  "UPDATE aset SET jumlah = (SELECT COALESCE(SUM(jumlah), 0) FROM aset_lokasi WHERE AsetId = ?), StatusAset = 'rusak' WHERE AsetId = ?",
-                  [data.AsetId, data.AsetId],
-                  (errUpdate) => {
-                    if (errUpdate) {
-                      console.error("[rusak] Error updating aset:", errUpdate);
-                    } else {
-                      console.log(
-                        `[rusak] Decreased jumlah by ${jumlahRusak} from lokasi_id=${data.lokasi_id} and set StatusAset='rusak' for AsetId=${data.AsetId}`
-                      );
-                    }
-                  }
-                );
+            res.status(201).json({
+              message: "Data kerusakan ditambahkan",
+              rusak: mapRow(rows3[0]),
+            });
+          }
+        );
+      });
+    };
 
-                db.query(
-                  "SELECT r.*, a.AsetId, a.NamaAset, al.lokasi FROM rusak r LEFT JOIN aset a ON r.aset_id = a.id LEFT JOIN aset_lokasi al ON r.lokasi_id = al.id WHERE r.id = ?",
-                  [rusakId],
-                  (err3, rows3) => {
-                    if (err3) return res.status(500).json(err3);
-
-                    // Log riwayat
-                    if (username) {
-                      getUserIdFromUsername(username, (err4, userData) => {
-                        if (!err4 && userData) {
-                          logRiwayat(
-                            "rusak_input",
-                            userData.id,
-                            userData.role,
-                            asetDbId,
-                            {
-                              lokasi: lokasi.lokasi,
-                              lokasi_id: data.lokasi_id,
-                              jumlah_rusak: jumlahRusak,
-                            },
-                            "rusak",
-                            rusakId
-                          );
-                        }
-                      });
-                    }
-
-                    const response = mapRow(rows3[0]);
-                    response.lokasi = lokasi.lokasi;
-                    response.lokasi_id = data.lokasi_id;
-
-                    res.status(201).json({
-                      message: "Data kerusakan ditambahkan",
-                      rusak: response,
-                    });
-                  }
-                );
-              }
-            );
-          });
-        };
-
-        if (username) {
-          getUserIdFromUsername(username, (errUser, userData) => {
-            insertRusak(errUser || !userData ? null : userData.id);
-          });
-        } else {
-          insertRusak(null);
-        }
-      }
-    );
+    if (username) {
+      getUserIdFromUsername(username, (errUser, userData) => {
+        insertRusak(errUser || !userData ? null : userData.id);
+      });
+    } else {
+      insertRusak(null);
+    }
   });
 });
 
@@ -326,12 +283,7 @@ router.put("/:id", requireAdmin, (req, res) => {
       return val;
     };
 
-    const fields = [
-      "tanggal",
-      "keterangan",
-      "tingkat_kerusakan",
-      "estimasi_biaya",
-    ];
+    const fields = ["TglRusak", "Kerusakan", "catatan"];
     fields.forEach((field) => {
       if (data[field] !== undefined) {
         const oldVal = normalizeValue(old[field]);
@@ -354,7 +306,7 @@ router.put("/:id", requireAdmin, (req, res) => {
       if (err2) return res.status(500).json(err2);
 
       db.query(
-        "SELECT r.*, u.username FROM rusak r LEFT JOIN user u ON r.user_id = u.id WHERE r.id = ?",
+        "SELECT r.*, a.AsetId, a.NamaAset FROM rusak r LEFT JOIN aset a ON r.aset_id = a.id WHERE r.id = ?",
         [id],
         (err3, rows3) => {
           if (err3) return res.status(500).json(err3);
@@ -363,22 +315,14 @@ router.put("/:id", requireAdmin, (req, res) => {
           if (username) {
             getUserIdFromUsername(username, (err4, userData) => {
               if (!err4 && userData) {
-                db.query(
-                  "SELECT id FROM aset WHERE AsetId = ?",
-                  [old.AsetId],
-                  (err5, asetRows) => {
-                    if (!err5 && asetRows && asetRows.length > 0) {
-                      logRiwayat(
-                        "rusak_edit",
-                        userData.id,
-                        userData.role,
-                        asetRows[0].id,
-                        changes,
-                        "rusak",
-                        id
-                      );
-                    }
-                  }
+                logRiwayat(
+                  "rusak_edit",
+                  userData.id,
+                  userData.role,
+                  old.aset_id,
+                  changes,
+                  "rusak",
+                  id
                 );
               }
             });
@@ -412,22 +356,14 @@ router.delete("/:id", requireAdmin, (req, res) => {
       if (username) {
         getUserIdFromUsername(username, (err3, userData) => {
           if (!err3 && userData) {
-            db.query(
-              "SELECT id FROM aset WHERE AsetId = ?",
-              [record.AsetId],
-              (err4, asetRows) => {
-                if (!err4 && asetRows && asetRows.length > 0) {
-                  logRiwayat(
-                    "rusak_delete",
-                    userData.id,
-                    userData.role,
-                    asetRows[0].id,
-                    null,
-                    "rusak",
-                    id
-                  );
-                }
-              }
+            logRiwayat(
+              "rusak_delete",
+              userData.id,
+              userData.role,
+              record.aset_id,
+              null,
+              "rusak",
+              id
             );
           }
         });

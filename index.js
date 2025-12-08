@@ -12,7 +12,7 @@ import notificationRouter from "./routes/notification.js";
 import rusakRouter from "./routes/rusak.js";
 import dipinjamRouter from "./routes/dipinjam.js";
 import dijualRouter from "./routes/dijual.js";
-import asetLokasiRouter from "./routes/asetLokasi.js";
+import mutasiRouter from "./routes/mutasi.js";
 import bebanRouter from "./routes/beban.js";
 import departemenRouter from "./routes/departemen.js";
 
@@ -42,7 +42,7 @@ app.use("/notification", notificationRouter);
 app.use("/rusak", rusakRouter);
 app.use("/dipinjam", dipinjamRouter);
 app.use("/dijual", dijualRouter);
-app.use("/aset-lokasi", asetLokasiRouter);
+app.use("/mutasi", mutasiRouter);
 app.use("/beban", bebanRouter);
 app.use("/departemen", departemenRouter);
 
