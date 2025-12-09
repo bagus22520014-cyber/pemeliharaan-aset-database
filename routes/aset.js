@@ -628,12 +628,15 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
               }
             }
           });
-          
+
           // Skip logging if only departemen_id and/or Lokasi changed (usually from mutasi)
           const changedKeys = Object.keys(perubahan);
-          const isOnlyLocationChange = changedKeys.length > 0 && 
-            changedKeys.every(key => key === 'Lokasi' || key === 'departemen_id');
-          
+          const isOnlyLocationChange =
+            changedKeys.length > 0 &&
+            changedKeys.every(
+              (key) => key === "Lokasi" || key === "departemen_id"
+            );
+
           if (Object.keys(perubahan).length > 0 && !isOnlyLocationChange) {
             logRiwayat("edit", user.id, user.role, current.id, perubahan);
           }

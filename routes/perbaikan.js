@@ -105,6 +105,7 @@ function mapRow(r) {
     deskripsi: r.deskripsi ?? null,
     biaya: r.biaya ?? null,
     teknisi: r.teknisi ?? null,
+    PurchaseOrder: r.PurchaseOrder ?? null,
   };
 }
 
@@ -296,13 +297,14 @@ router.post("/", requireUserOrAdmin, (req, res) => {
     const username = req.cookies?.username || req.headers["x-username"];
 
     const insertPerbaikan = () => {
-      const q = `INSERT INTO perbaikan (aset_id, tanggal_perbaikan, deskripsi, biaya, teknisi) VALUES (?, ?, ?, ?, ?)`;
+      const q = `INSERT INTO perbaikan (aset_id, tanggal_perbaikan, deskripsi, biaya, teknisi, PurchaseOrder) VALUES (?, ?, ?, ?, ?, ?)`;
       const vals = [
         asetDbId,
         data.tanggal_perbaikan || data.tanggal,
         data.deskripsi ?? null,
         data.biaya ?? null,
         data.teknisi ?? null,
+        data.PurchaseOrder ?? null,
       ];
       db.query(q, vals, (err2, result) => {
         if (err2) return res.status(500).json(err2);
@@ -344,6 +346,7 @@ router.post("/", requireUserOrAdmin, (req, res) => {
                       deskripsi: data.deskripsi,
                       biaya: data.biaya,
                       teknisi: data.teknisi,
+                      PurchaseOrder: data.PurchaseOrder,
                     },
                     "perbaikan",
                     perbaikanId

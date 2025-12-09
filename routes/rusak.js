@@ -162,9 +162,7 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
 router.post("/", requireUserOrAdmin, (req, res) => {
   const data = req.body;
   if (!data || !data.AsetId || !data.TglRusak) {
-    return res
-      .status(400)
-      .json({ message: "AsetId dan TglRusak diperlukan" });
+    return res.status(400).json({ message: "AsetId dan TglRusak diperlukan" });
   }
   const role = getRoleFromRequest(req);
   const beban = getBebanListFromRequest(req);
