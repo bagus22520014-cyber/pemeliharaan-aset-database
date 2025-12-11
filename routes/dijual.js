@@ -8,6 +8,10 @@ import {
   isSameLocation,
   buildBebanFilterSQL,
 } from "./middleware/auth.js";
+import {
+  getApprovalStatus,
+  notifyAdminsForApproval,
+} from "./middleware/approval.js";
 
 const router = express.Router();
 
@@ -68,6 +72,8 @@ function mapRow(r) {
     HargaJual: r.HargaJual ?? null,
     Pembeli: r.Pembeli ?? null,
     catatan: r.catatan ?? null,
+    approval_status: r.approval_status ?? null,
+    approval_date: formatDate(r.approval_date),
   };
 }
 
@@ -191,33 +197,39 @@ router.post("/", requireUserOrAdmin, (req, res) => {
     const username = req.cookies?.username || req.headers["x-username"];
 
     const insertDijual = (uid) => {
-      const q = `INSERT INTO dijual (aset_id, TglDijual, HargaJual, Pembeli, catatan) VALUES (?, ?, ?, ?, ?)`;
+      const approvalStatus = getApprovalStatus(role);
+
+      const q = `INSERT INTO dijual (aset_id, TglDijual, HargaJual, Pembeli, catatan, approval_status, approval_date) VALUES (?, ?, ?, ?, ?, ?, ?)`;
       const vals = [
         asetDbId,
         data.tanggal_jual,
         data.harga_jual ?? null,
         data.pembeli ?? null,
         data.alasan ?? data.catatan ?? null,
+        approvalStatus,
+        approvalStatus === "disetujui" ? new Date() : null,
       ];
       db.query(q, vals, (err2, result) => {
         if (err2) return res.status(500).json(err2);
 
         const dijualId = result.insertId;
 
-        // Update StatusAset to 'dijual'
-        db.query(
-          "UPDATE aset SET StatusAset = 'dijual' WHERE AsetId = ?",
-          [data.AsetId],
-          (errUpdate) => {
-            if (errUpdate) {
-              console.error("[dijual] Error updating aset:", errUpdate);
-            } else {
-              console.log(
-                `[dijual] Set StatusAset='dijual' for AsetId=${data.AsetId}`
-              );
+        // Update StatusAset to 'dijual' only when created as 'disetujui' (admin-created)
+        if (approvalStatus === "disetujui") {
+          db.query(
+            "UPDATE aset SET StatusAset = 'dijual' WHERE AsetId = ?",
+            [data.AsetId],
+            (errUpdate) => {
+              if (errUpdate) {
+                console.error("[dijual] Error updating aset:", errUpdate);
+              } else {
+                console.log(
+                  `[dijual] Set StatusAset='dijual' for AsetId=${data.AsetId}`
+                );
+              }
             }
-          }
-        );
+          );
+        }
 
         db.query(
           "SELECT d.*, a.AsetId, a.NamaAset FROM dijual d LEFT JOIN aset a ON d.aset_id = a.id WHERE d.id = ?",
@@ -243,6 +255,21 @@ router.post("/", requireUserOrAdmin, (req, res) => {
                     "dijual",
                     dijualId
                   );
+
+                  // Notify admins if user submission
+                  if (
+                    userData.role !== "admin" &&
+                    approvalStatus === "diajukan"
+                  ) {
+                    notifyAdminsForApproval(
+                      "dijual",
+                      dijualId,
+                      data.AsetId,
+                      `User ${username} mengajukan penjualan aset ${
+                        data.AsetId
+                      } kepada ${data.pembeli || "pembeli tidak disebutkan"}`
+                    );
+                  }
                 }
               });
             }

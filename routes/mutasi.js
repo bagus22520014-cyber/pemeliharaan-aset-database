@@ -7,6 +7,10 @@ import {
   getBebanListFromRequest,
   buildBebanFilterSQL,
 } from "./middleware/auth.js";
+import {
+  getApprovalStatus,
+  notifyAdminsForApproval,
+} from "./middleware/approval.js";
 
 const router = express.Router();
 
@@ -82,6 +86,8 @@ function mapRow(r) {
     ruangan_tujuan: r.ruangan_tujuan ?? null,
     alasan: r.alasan ?? null,
     catatan: r.catatan ?? null,
+    approval_status: r.approval_status ?? null,
+    approval_date: formatDate(r.approval_date),
     created_at: r.created_at ?? null,
     updated_at: r.updated_at ?? null,
   };
@@ -361,10 +367,12 @@ router.post("/", requireUserOrAdmin, (req, res) => {
           // Use ruangan_asal from request, or fall back to current aset Lokasi
           const finalRuanganAsal = ruangan_asal || currentLokasi;
 
+          const approvalStatus = getApprovalStatus(role);
+
           const q = `
             INSERT INTO mutasi 
-            (aset_id, TglMutasi, departemen_asal_id, departemen_tujuan_id, ruangan_asal, ruangan_tujuan, alasan, catatan)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (aset_id, TglMutasi, departemen_asal_id, departemen_tujuan_id, ruangan_asal, ruangan_tujuan, alasan, catatan, approval_status, approval_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `;
           db.query(
             q,
@@ -377,6 +385,8 @@ router.post("/", requireUserOrAdmin, (req, res) => {
               ruangan_tujuan || null,
               alasan || null,
               catatan || null,
+              approvalStatus,
+              approvalStatus === "disetujui" ? new Date() : null,
             ],
             (err, result) => {
               if (err) return res.status(500).json(err);
@@ -397,9 +407,9 @@ router.post("/", requireUserOrAdmin, (req, res) => {
 
                   const asetIdStr = asetRows2?.[0]?.AsetId || null;
 
-                  // Log to riwayat
+                  // Log to riwayat (use 'mutasi_input' so approval merge finds the input entry)
                   logRiwayat(
-                    "mutasi",
+                    "mutasi_input",
                     user.id,
                     role,
                     aset_id,
@@ -415,6 +425,20 @@ router.post("/", requireUserOrAdmin, (req, res) => {
                     "mutasi",
                     mutasiId
                   );
+
+                  // Notify admins if user submission
+                  if (role !== "admin" && approvalStatus === "diajukan") {
+                    notifyAdminsForApproval(
+                      "mutasi",
+                      mutasiId,
+                      asetIdStr || aset_id,
+                      `User ${username} mengajukan mutasi aset ${
+                        asetIdStr || aset_id
+                      } dari ${
+                        finalRuanganAsal || "lokasi tidak disebutkan"
+                      } ke ${ruangan_tujuan || "lokasi tidak disebutkan"}`
+                    );
+                  }
 
                   return res.json({
                     id: mutasiId,

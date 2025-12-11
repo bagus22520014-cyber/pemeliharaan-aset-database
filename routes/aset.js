@@ -7,6 +7,10 @@ import {
   isSameLocation,
   buildBebanFilterSQL,
 } from "./middleware/auth.js";
+import {
+  getApprovalStatus,
+  notifyAdminsForApproval,
+} from "./middleware/approval.js";
 import express from "express";
 import db from "../db.js";
 import multer from "multer";
@@ -160,6 +164,8 @@ function mapRow(row) {
     Keterangan: row.Keterangan ?? row.Kekurangan ?? null,
     // Deprecated: Kekurangan column removed; use Keterangan instead
     Gambar: row.Gambar ?? null,
+    approval_status: row.approval_status ?? null,
+    approval_date: formatDate(row.approval_date),
   };
 }
 
@@ -256,10 +262,13 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
   console.log(
     `[aset] insert values (AsetId, NamaAset, beban_id, departemen_id, Gambar): ${data.AsetId},${data.NamaAset},${data.beban_id},${data.departemen_id},${fileName}`
   );
+  const role = getRoleFromRequest(req);
+  const approvalStatus = getApprovalStatus(role);
+
   const q = `
     INSERT INTO aset 
-    (AsetId, AccurateId, NamaAset, Spesifikasi, Grup, beban_id, departemen_id, AkunPerkiraan, NilaiAset, TglPembelian, MasaManfaat, Gambar, Keterangan, StatusAset, Pengguna, Lokasi)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (AsetId, AccurateId, NamaAset, Spesifikasi, Grup, beban_id, departemen_id, AkunPerkiraan, NilaiAset, TglPembelian, MasaManfaat, Gambar, Keterangan, StatusAset, Pengguna, Lokasi, approval_status, approval_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
@@ -276,9 +285,11 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
     data.MasaManfaat,
     fileName,
     data.Keterangan ?? null,
-    data.StatusAset ?? null,
+    data.StatusAset ?? "aktif",
     data.Pengguna ?? null,
     data.Lokasi ?? null,
+    approvalStatus,
+    approvalStatus === "disetujui" ? new Date() : null,
   ];
   try {
     console.log(`[aset] full values: ${JSON.stringify(values)}`);
@@ -296,7 +307,25 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
       req.cookies?.username || req.headers["x-username"] || "unknown";
     getUserIdFromUsername(username, (errUser, user) => {
       if (!errUser && user) {
-        logRiwayat("input", user.id, user.role, result.insertId, null);
+        logRiwayat(
+          "input",
+          user.id,
+          user.role,
+          result.insertId,
+          null,
+          "aset",
+          result.insertId
+        );
+
+        // Notify admins if user submission
+        if (user.role !== "admin" && approvalStatus === "diajukan") {
+          notifyAdminsForApproval(
+            "aset",
+            result.insertId,
+            data.AsetId,
+            `User ${username} mengajukan aset baru: ${data.NamaAset} (${data.AsetId})`
+          );
+        }
       }
     });
 
@@ -638,7 +667,15 @@ router.put("/:id", requireAdmin, upload.single("Gambar"), (req, res) => {
             );
 
           if (Object.keys(perubahan).length > 0 && !isOnlyLocationChange) {
-            logRiwayat("edit", user.id, user.role, current.id, perubahan);
+            logRiwayat(
+              "edit",
+              user.id,
+              user.role,
+              current.id,
+              perubahan,
+              "aset",
+              current.id
+            );
           }
         }
       });

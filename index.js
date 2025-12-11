@@ -15,6 +15,7 @@ import dijualRouter from "./routes/dijual.js";
 import mutasiRouter from "./routes/mutasi.js";
 import bebanRouter from "./routes/beban.js";
 import departemenRouter from "./routes/departemen.js";
+import approvalRouter from "./routes/approval.js";
 
 const app = express();
 app.use(express.json());
@@ -45,6 +46,7 @@ app.use("/dijual", dijualRouter);
 app.use("/mutasi", mutasiRouter);
 app.use("/beban", bebanRouter);
 app.use("/departemen", departemenRouter);
+app.use("/approval", approvalRouter);
 
 function printRoutes(app) {
   try {

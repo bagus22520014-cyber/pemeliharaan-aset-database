@@ -1,0 +1,16 @@
+{
+  "AsetId": "TEST-001/MLG-NET/2025",
+  "AccurateId": "ACC-TEST-001",
+  "NamaAset": "Testing Approval - Router",
+  "Spesifikasi": "Test approval workflow",
+  "Grup": "DISTRIBUSI JARINGAN",
+  "beban_id": 8,
+  "departemen_id": 3,
+  "AkunPerkiraan": "1701-04 (Distribusi Jaringan / Headend)",
+  "NilaiAset": 5000000,
+  "TglPembelian": "2025-01-15",
+  "MasaManfaat": 5,
+  "Pengguna": "User Test",
+  "Lokasi": "Kantor Malang",
+  "Keterangan": "Pengajuan approval test"
+}

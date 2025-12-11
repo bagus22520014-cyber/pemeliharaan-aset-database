@@ -11,19 +11,35 @@ const router = express.Router();
 // Helper function to map notification row
 function mapNotification(r) {
   if (!r) return r;
+
+  // Parse message to extract title if formatted as [Title] Message
+  let judul = null;
+  let pesan = r.message || r.pesan || null;
+  if (pesan && pesan.startsWith("[")) {
+    const match = pesan.match(/^\[([^\]]+)\]\s*(.+)$/);
+    if (match) {
+      judul = match[1];
+      pesan = match[2];
+    }
+  }
+
   return {
     id: r.id ?? null,
     user_id: r.user_id ?? null,
     username: r.username ?? null,
     beban: r.beban ?? null,
-    tipe: r.tipe ?? null,
-    judul: r.judul ?? null,
-    pesan: r.pesan ?? null,
+    tipe: r.type ?? r.tipe ?? null,
+    judul: judul || r.judul || null,
+    pesan: pesan,
     link: r.link ?? null,
     tabel_ref: r.tabel_ref ?? null,
     record_id: r.record_id ?? null,
-    dibaca: r.dibaca ?? false,
-    waktu_dibuat: r.waktu_dibuat ?? null,
+    AsetId: r.AsetId ?? null,
+    approver_user_id: r.approver_user_id ?? null,
+    approver_username: r.approver_username ?? null,
+    approver_role: r.approver_role ?? null,
+    dibaca: r.dibaca === 1 || r.dibaca === true ? true : false,
+    waktu_dibuat: r.created_at ?? r.waktu_dibuat ?? null,
     waktu_dibaca: r.waktu_dibaca ?? null,
   };
 }
@@ -75,11 +91,11 @@ router.get("/", requireUserOrAdmin, (req, res) => {
         params.push(...beban);
       }
 
-      // Filter by dibaca status
+      // Filter by dibaca status (use dibaca column if exists, fallback handled in mapping)
       if (dibaca === "true") {
-        q += ` AND n.dibaca = TRUE`;
+        q += ` AND (n.dibaca = TRUE OR n.dibaca = 1)`;
       } else if (dibaca === "false") {
-        q += ` AND n.dibaca = FALSE`;
+        q += ` AND (n.dibaca = FALSE OR n.dibaca = 0 OR n.dibaca IS NULL)`;
       }
 
       q += ` ORDER BY n.waktu_dibuat DESC LIMIT ?`;

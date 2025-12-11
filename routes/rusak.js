@@ -8,6 +8,10 @@ import {
   isSameLocation,
   buildBebanFilterSQL,
 } from "./middleware/auth.js";
+import {
+  getApprovalStatus,
+  notifyAdminsForApproval,
+} from "./middleware/approval.js";
 
 const router = express.Router();
 
@@ -67,6 +71,8 @@ function mapRow(r) {
     TglRusak: formatDate(r.TglRusak),
     Kerusakan: r.Kerusakan ?? null,
     catatan: r.catatan ?? null,
+    approval_status: r.approval_status ?? null,
+    approval_date: formatDate(r.approval_date),
   };
 }
 
@@ -183,32 +189,38 @@ router.post("/", requireUserOrAdmin, (req, res) => {
     const username = req.cookies?.username || req.headers["x-username"];
 
     const insertRusak = (uid) => {
-      const q = `INSERT INTO rusak (aset_id, TglRusak, Kerusakan, catatan) VALUES (?, ?, ?, ?)`;
+      const approvalStatus = getApprovalStatus(role);
+
+      const q = `INSERT INTO rusak (aset_id, TglRusak, Kerusakan, catatan, approval_status, approval_date) VALUES (?, ?, ?, ?, ?, ?)`;
       const vals = [
         asetDbId,
         data.TglRusak,
         data.Kerusakan ?? null,
         data.catatan ?? null,
+        approvalStatus,
+        approvalStatus === "disetujui" ? new Date() : null,
       ];
       db.query(q, vals, (err2, result) => {
         if (err2) return res.status(500).json(err2);
 
         const rusakId = result.insertId;
 
-        // Update StatusAset to 'rusak'
-        db.query(
-          "UPDATE aset SET StatusAset = 'rusak' WHERE AsetId = ?",
-          [data.AsetId],
-          (errUpdate) => {
-            if (errUpdate) {
-              console.error("[rusak] Error updating aset:", errUpdate);
-            } else {
-              console.log(
-                `[rusak] Set StatusAset='rusak' for AsetId=${data.AsetId}`
-              );
+        // Update StatusAset to 'rusak' only when created as 'disetujui' (admin-created)
+        if (approvalStatus === "disetujui") {
+          db.query(
+            "UPDATE aset SET StatusAset = 'rusak' WHERE AsetId = ?",
+            [data.AsetId],
+            (errUpdate) => {
+              if (errUpdate) {
+                console.error("[rusak] Error updating aset:", errUpdate);
+              } else {
+                console.log(
+                  `[rusak] Set StatusAset='rusak' for AsetId=${data.AsetId}`
+                );
+              }
             }
-          }
-        );
+          );
+        }
 
         db.query(
           "SELECT r.*, a.AsetId, a.NamaAset FROM rusak r LEFT JOIN aset a ON r.aset_id = a.id WHERE r.id = ?",
@@ -233,6 +245,21 @@ router.post("/", requireUserOrAdmin, (req, res) => {
                     "rusak",
                     rusakId
                   );
+
+                  // Notify admins if user submission
+                  if (
+                    userData.role !== "admin" &&
+                    approvalStatus === "diajukan"
+                  ) {
+                    notifyAdminsForApproval(
+                      "rusak",
+                      rusakId,
+                      data.AsetId,
+                      `User ${username} melaporkan aset rusak: ${
+                        data.AsetId
+                      } - ${data.Kerusakan || "tanpa keterangan"}`
+                    );
+                  }
                 }
               });
             }

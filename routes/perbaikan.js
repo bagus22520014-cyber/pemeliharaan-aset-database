@@ -9,6 +9,10 @@ import {
   isSameLocation,
   buildBebanFilterSQL,
 } from "./middleware/auth.js";
+import {
+  getApprovalStatus,
+  notifyAdminsForApproval,
+} from "./middleware/approval.js";
 
 const router = express.Router();
 
@@ -106,6 +110,8 @@ function mapRow(r) {
     biaya: r.biaya ?? null,
     teknisi: r.teknisi ?? null,
     PurchaseOrder: r.PurchaseOrder ?? null,
+    approval_status: r.approval_status ?? null,
+    approval_date: formatDate(r.approval_date),
   };
 }
 
@@ -297,7 +303,9 @@ router.post("/", requireUserOrAdmin, (req, res) => {
     const username = req.cookies?.username || req.headers["x-username"];
 
     const insertPerbaikan = () => {
-      const q = `INSERT INTO perbaikan (aset_id, tanggal_perbaikan, deskripsi, biaya, teknisi, PurchaseOrder) VALUES (?, ?, ?, ?, ?, ?)`;
+      const approvalStatus = getApprovalStatus(role);
+
+      const q = `INSERT INTO perbaikan (aset_id, tanggal_perbaikan, deskripsi, biaya, teknisi, PurchaseOrder, approval_status, approval_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
       const vals = [
         asetDbId,
         data.tanggal_perbaikan || data.tanggal,
@@ -305,26 +313,30 @@ router.post("/", requireUserOrAdmin, (req, res) => {
         data.biaya ?? null,
         data.teknisi ?? null,
         data.PurchaseOrder ?? null,
+        approvalStatus,
+        approvalStatus === "disetujui" ? new Date() : null,
       ];
       db.query(q, vals, (err2, result) => {
         if (err2) return res.status(500).json(err2);
 
         const perbaikanId = result.insertId;
 
-        // Update StatusAset to 'diperbaiki'
-        db.query(
-          "UPDATE aset SET StatusAset = 'diperbaiki' WHERE AsetId = ?",
-          [data.AsetId],
-          (errUpdate) => {
-            if (errUpdate) {
-              console.error("[perbaikan] Error updating aset:", errUpdate);
-            } else {
-              console.log(
-                `[perbaikan] Set StatusAset='diperbaiki' for AsetId=${data.AsetId}`
-              );
+        // Update StatusAset to 'diperbaiki' only when created as 'disetujui' (admin-created)
+        if (approvalStatus === "disetujui") {
+          db.query(
+            "UPDATE aset SET StatusAset = 'diperbaiki' WHERE AsetId = ?",
+            [data.AsetId],
+            (errUpdate) => {
+              if (errUpdate) {
+                console.error("[perbaikan] Error updating aset:", errUpdate);
+              } else {
+                console.log(
+                  `[perbaikan] Set StatusAset='diperbaiki' for AsetId=${data.AsetId}`
+                );
+              }
             }
-          }
-        );
+          );
+        }
 
         db.query(
           "SELECT p.*, a.AsetId, a.NamaAset FROM perbaikan p LEFT JOIN aset a ON p.aset_id = a.id WHERE p.id = ?",
@@ -352,17 +364,32 @@ router.post("/", requireUserOrAdmin, (req, res) => {
                     perbaikanId
                   );
 
-                  // Create notification for the beban
-                  createNotification(
-                    null, // broadcast to beban
-                    asetBeban,
-                    "info",
-                    "Perbaikan Baru Ditambahkan",
-                    `Perbaikan untuk aset ${data.AsetId} telah ditambahkan oleh ${username}`,
-                    `/perbaikan/${perbaikanId}`,
-                    "perbaikan",
-                    perbaikanId
-                  );
+                  // Notify admins if user submission
+                  if (
+                    userData.role !== "admin" &&
+                    approvalStatus === "diajukan"
+                  ) {
+                    notifyAdminsForApproval(
+                      "perbaikan",
+                      perbaikanId,
+                      data.AsetId,
+                      `User ${username} mengajukan perbaikan untuk aset ${
+                        data.AsetId
+                      }: ${data.deskripsi || "tanpa deskripsi"}`
+                    );
+                  } else {
+                    // Create notification for the beban (only for approved/admin)
+                    createNotification(
+                      null, // broadcast to beban
+                      asetBeban,
+                      "info",
+                      "Perbaikan Baru Ditambahkan",
+                      `Perbaikan untuk aset ${data.AsetId} telah ditambahkan oleh ${username}`,
+                      `/perbaikan/${perbaikanId}`,
+                      "perbaikan",
+                      perbaikanId
+                    );
+                  }
                 }
               });
             }

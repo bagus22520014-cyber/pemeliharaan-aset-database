@@ -8,6 +8,10 @@ import {
   isSameLocation,
   buildBebanFilterSQL,
 } from "./middleware/auth.js";
+import {
+  getApprovalStatus,
+  notifyAdminsForApproval,
+} from "./middleware/approval.js";
 
 const router = express.Router();
 
@@ -68,6 +72,8 @@ function mapRow(r) {
     TglPinjam: formatDate(r.TglPinjam),
     TglKembali: formatDate(r.TglKembali),
     catatan: r.catatan ?? null,
+    approval_status: r.approval_status ?? null,
+    approval_date: formatDate(r.approval_date),
   };
 }
 
@@ -191,33 +197,39 @@ router.post("/", requireUserOrAdmin, (req, res) => {
     const username = req.cookies?.username || req.headers["x-username"];
 
     const insertDipinjam = (uid) => {
-      const q = `INSERT INTO dipinjam (aset_id, Peminjam, TglPinjam, TglKembali, catatan) VALUES (?, ?, ?, ?, ?)`;
+      const approvalStatus = getApprovalStatus(role);
+
+      const q = `INSERT INTO dipinjam (aset_id, Peminjam, TglPinjam, TglKembali, catatan, approval_status, approval_date) VALUES (?, ?, ?, ?, ?, ?, ?)`;
       const vals = [
         asetDbId,
         data.peminjam,
         data.tanggal_pinjam,
         data.tanggal_kembali ?? null,
         data.keperluan ?? data.catatan ?? null,
+        approvalStatus,
+        approvalStatus === "disetujui" ? new Date() : null,
       ];
       db.query(q, vals, (err2, result) => {
         if (err2) return res.status(500).json(err2);
 
         const dipinjamId = result.insertId;
 
-        // Update StatusAset to 'dipinjam'
-        db.query(
-          "UPDATE aset SET StatusAset = 'dipinjam' WHERE AsetId = ?",
-          [data.AsetId],
-          (errUpdate) => {
-            if (errUpdate) {
-              console.error("[dipinjam] Error updating aset:", errUpdate);
-            } else {
-              console.log(
-                `[dipinjam] Set StatusAset='dipinjam' for AsetId=${data.AsetId}`
-              );
+        // Update StatusAset to 'dipinjam' only when created as 'disetujui' (admin-created)
+        if (approvalStatus === "disetujui") {
+          db.query(
+            "UPDATE aset SET StatusAset = 'dipinjam' WHERE AsetId = ?",
+            [data.AsetId],
+            (errUpdate) => {
+              if (errUpdate) {
+                console.error("[dipinjam] Error updating aset:", errUpdate);
+              } else {
+                console.log(
+                  `[dipinjam] Set StatusAset='dipinjam' for AsetId=${data.AsetId}`
+                );
+              }
             }
-          }
-        );
+          );
+        }
 
         db.query(
           "SELECT d.*, a.AsetId, a.NamaAset FROM dipinjam d LEFT JOIN aset a ON d.aset_id = a.id WHERE d.id = ?",
@@ -243,6 +255,19 @@ router.post("/", requireUserOrAdmin, (req, res) => {
                     "dipinjam",
                     dipinjamId
                   );
+
+                  // Notify admins if user submission
+                  if (
+                    userData.role !== "admin" &&
+                    approvalStatus === "diajukan"
+                  ) {
+                    notifyAdminsForApproval(
+                      "dipinjam",
+                      dipinjamId,
+                      data.AsetId,
+                      `User ${username} mengajukan peminjaman aset ${data.AsetId} oleh ${data.peminjam}`
+                    );
+                  }
                 }
               });
             }
