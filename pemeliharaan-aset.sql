@@ -217,7 +217,7 @@ CREATE TABLE `perbaikan` (
   `aset_id` int(11) NOT NULL,
   `tanggal_perbaikan` date NOT NULL,
   `deskripsi` text DEFAULT NULL,
-  `biaya` decimal(15,2) DEFAULT 0.00,
+  `biaya` int(11) DEFAULT 0,
   `teknisi` varchar(100) DEFAULT NULL,
   `PurchaseOrder` varchar(100) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),

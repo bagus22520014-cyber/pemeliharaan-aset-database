@@ -53,7 +53,7 @@ Menyimpan data perbaikan aset.
 - `aset_id` (INT, FK → aset.id) - **Gunakan aset_id INT, bukan AsetId VARCHAR**
 - `tanggal_perbaikan` (DATE) - Tanggal perbaikan dilakukan
 - `deskripsi` (TEXT) - Deskripsi kerusakan/perbaikan
-- `biaya` (DECIMAL) - Biaya perbaikan
+- `biaya` (INT) - Biaya perbaikan (disimpan sebagai integer)
 - `teknisi` (VARCHAR) - Nama teknisi
 - `status` (ENUM: 'pending', 'selesai', 'batal') - Status perbaikan
 - `created_at` (TIMESTAMP)

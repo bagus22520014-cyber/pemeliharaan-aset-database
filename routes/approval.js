@@ -434,7 +434,8 @@ router.post("/:tabelRef/:recordId/:action", requireAdmin, (req, res) => {
                   newStatus = "rusak";
                   break;
                 case "perbaikan":
-                  newStatus = "diperbaiki";
+                  // Per requirement: when perbaikan is approved, set asset back to 'aktif'
+                  newStatus = "aktif";
                   break;
                 case "dipinjam":
                   newStatus = "dipinjam";
@@ -460,6 +461,135 @@ router.post("/:tabelRef/:recordId/:action", requireAdmin, (req, res) => {
                     } else {
                       console.log(
                         `[approval] Set aset#${asetDbId} StatusAset='${newStatus}' due to ${tabelRef}#${recordId} approval`
+                      );
+                    }
+                  }
+                );
+              }
+
+              // If this is a mutasi approval, apply the mutasi target to the aset record
+              if (tabelRef === "mutasi" && status === "disetujui") {
+                db.query(
+                  "SELECT aset_id, departemen_tujuan_id, ruangan_tujuan FROM mutasi WHERE id = ?",
+                  [recordId],
+                  (errMut, mutRows) => {
+                    if (errMut) {
+                      console.error(
+                        `[approval] Error fetching mutasi#${recordId} to apply changes:`,
+                        errMut
+                      );
+                      return;
+                    }
+
+                    if (!mutRows || mutRows.length === 0) {
+                      console.warn(
+                        `[approval] No mutasi found for id ${recordId} while applying approval`
+                      );
+                      return;
+                    }
+
+                    const mut = mutRows[0];
+                    const asetNumericId = mut.aset_id;
+                    const depTarget = mut.departemen_tujuan_id || null;
+                    const lokasiTarget = mut.ruangan_tujuan || null;
+
+                    // Read current aset values so we can log old->new in riwayat
+                    db.query(
+                      "SELECT departemen_id, Lokasi FROM aset WHERE id = ?",
+                      [asetNumericId],
+                      (errFetch, asetRows) => {
+                        if (errFetch) {
+                          console.error(
+                            `[approval] Error fetching aset#${asetNumericId} before applying mutasi:`,
+                            errFetch
+                          );
+                        }
+
+                        const oldDep =
+                          asetRows && asetRows[0]
+                            ? asetRows[0].departemen_id
+                            : null;
+                        const oldLokasi =
+                          asetRows && asetRows[0] ? asetRows[0].Lokasi : null;
+
+                        // Apply the mutasi to aset
+                        db.query(
+                          "UPDATE aset SET departemen_id = ?, Lokasi = ? WHERE id = ?",
+                          [depTarget, lokasiTarget, asetNumericId],
+                          (errUpd) => {
+                            if (errUpd) {
+                              console.error(
+                                `[approval] Error applying mutasi#${recordId} to aset#${asetNumericId}:`,
+                                errUpd
+                              );
+                              return;
+                            }
+
+                            console.log(
+                              `[approval] Applied mutasi#${recordId} to aset#${asetNumericId} (departemen_id=${depTarget}, Lokasi=${lokasiTarget})`
+                            );
+
+                            // Log riwayat entry for the applied change
+                            const perubahan = {
+                              apply_mutasi: {
+                                from: {
+                                  departemen_id: oldDep,
+                                  Lokasi: oldLokasi,
+                                },
+                                to: {
+                                  departemen_id: depTarget,
+                                  Lokasi: lokasiTarget,
+                                },
+                              },
+                            };
+
+                            const qRiwayat = `INSERT INTO riwayat (jenis_aksi, user_id, role, aset_id, perubahan, tabel_ref, record_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+                            db.query(
+                              qRiwayat,
+                              [
+                                "apply_mutasi",
+                                adminUser.id,
+                                adminUser.role,
+                                asetNumericId,
+                                JSON.stringify(perubahan),
+                                "mutasi",
+                                recordId,
+                              ],
+                              (errR) => {
+                                if (errR) {
+                                  console.error(
+                                    `[approval] Error inserting riwayat for applied mutasi#${recordId}:`,
+                                    errR
+                                  );
+                                } else {
+                                  console.log(
+                                    `[approval] Logged riwayat apply_mutasi for mutasi#${recordId} -> aset#${asetNumericId}`
+                                  );
+                                }
+                              }
+                            );
+                          }
+                        );
+                      }
+                    );
+                  }
+                );
+              }
+
+              // If this is a dijual approval, set the asset value to zero
+              if (tabelRef === "dijual" && status === "disetujui") {
+                db.query(
+                  "UPDATE aset SET NilaiAset = 0 WHERE id = ?",
+                  [asetDbId],
+                  (errZero) => {
+                    if (errZero) {
+                      console.error(
+                        `[approval] Error setting NilaiAset=0 for aset#${asetDbId} due to dijual#${recordId}:`,
+                        errZero
+                      );
+                    } else {
+                      console.log(
+                        `[approval] Set NilaiAset=0 for aset#${asetDbId} due to dijual#${recordId} approval`
                       );
                     }
                   }

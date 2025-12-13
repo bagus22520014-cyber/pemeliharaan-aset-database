@@ -107,12 +107,21 @@ function mapRow(r) {
     NamaAset: r.NamaAset ?? null,
     tanggal_perbaikan: formatDate(r.tanggal_perbaikan),
     deskripsi: r.deskripsi ?? null,
-    biaya: r.biaya ?? null,
+    biaya:
+      r.biaya !== null && r.biaya !== undefined ? parseInt(r.biaya, 10) : null,
     teknisi: r.teknisi ?? null,
     PurchaseOrder: r.PurchaseOrder ?? null,
     approval_status: r.approval_status ?? null,
     approval_date: formatDate(r.approval_date),
   };
+}
+
+// Normalize biaya values to integer (round if necessary). Returns null when input is empty/invalid.
+function normalizeBiaya(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (Number.isNaN(n)) return null;
+  return Math.round(n);
 }
 
 // Logging
@@ -310,7 +319,7 @@ router.post("/", requireUserOrAdmin, (req, res) => {
         asetDbId,
         data.tanggal_perbaikan || data.tanggal,
         data.deskripsi ?? null,
-        data.biaya ?? null,
+        normalizeBiaya(data.biaya ?? data.nominal ?? null),
         data.teknisi ?? null,
         data.PurchaseOrder ?? null,
         approvalStatus,
@@ -321,17 +330,39 @@ router.post("/", requireUserOrAdmin, (req, res) => {
 
         const perbaikanId = result.insertId;
 
-        // Update StatusAset to 'diperbaiki' only when created as 'disetujui' (admin-created)
-        if (approvalStatus === "disetujui") {
+        // Update StatusAset:
+        // - When created as 'diajukan' (user submission), mark asset as 'diperbaiki' (pending repair)
+        // - When created as 'disetujui' (admin-created and immediately approved), mark asset as 'aktif' per requirement
+        if (approvalStatus === "diajukan") {
           db.query(
             "UPDATE aset SET StatusAset = 'diperbaiki' WHERE AsetId = ?",
             [data.AsetId],
             (errUpdate) => {
               if (errUpdate) {
-                console.error("[perbaikan] Error updating aset:", errUpdate);
+                console.error(
+                  "[perbaikan] Error updating aset (diajukan):",
+                  errUpdate
+                );
               } else {
                 console.log(
-                  `[perbaikan] Set StatusAset='diperbaiki' for AsetId=${data.AsetId}`
+                  `[perbaikan] Set StatusAset='diperbaiki' for AsetId=${data.AsetId} (diajukan)`
+                );
+              }
+            }
+          );
+        } else if (approvalStatus === "disetujui") {
+          db.query(
+            "UPDATE aset SET StatusAset = 'aktif' WHERE AsetId = ?",
+            [data.AsetId],
+            (errUpdate) => {
+              if (errUpdate) {
+                console.error(
+                  "[perbaikan] Error updating aset (disetujui):",
+                  errUpdate
+                );
+              } else {
+                console.log(
+                  `[perbaikan] Set StatusAset='aktif' for AsetId=${data.AsetId} (disetujui)`
                 );
               }
             }
@@ -356,7 +387,7 @@ router.post("/", requireUserOrAdmin, (req, res) => {
                     {
                       tanggal_perbaikan: data.tanggal_perbaikan || data.tanggal,
                       deskripsi: data.deskripsi,
-                      biaya: data.biaya,
+                      biaya: normalizeBiaya(data.biaya ?? data.nominal ?? null),
                       teknisi: data.teknisi,
                       PurchaseOrder: data.PurchaseOrder,
                     },
@@ -419,16 +450,18 @@ router.put("/:id", requireAdmin, (req, res) => {
 
     const current = rows[0];
 
+    // Accept either `biaya` or legacy `nominal` for backward compatibility.
+    const biayaVal = normalizeBiaya(data.biaya ?? data.nominal ?? null);
     const values = [
       data.AsetId,
       data.tanggal,
       data.PurchaseOrder,
       data.vendor,
       data.bagian,
-      data.nominal,
+      biayaVal,
       id,
     ];
-    const q = `UPDATE perbaikan SET AsetId = COALESCE(?, AsetId), tanggal = COALESCE(?, tanggal), PurchaseOrder = COALESCE(?, PurchaseOrder), vendor = COALESCE(?, vendor), bagian = COALESCE(?, bagian), nominal = COALESCE(?, nominal) WHERE id = ?`;
+    const q = `UPDATE perbaikan SET AsetId = COALESCE(?, AsetId), tanggal_perbaikan = COALESCE(?, tanggal_perbaikan), PurchaseOrder = COALESCE(?, PurchaseOrder), vendor = COALESCE(?, vendor), bagian = COALESCE(?, bagian), biaya = COALESCE(?, biaya) WHERE id = ?`;
     db.query(q, values, (err2, result) => {
       if (err2) return res.status(500).json(err2);
       db.query("SELECT * FROM perbaikan WHERE id = ?", [id], (err3, rows3) => {
@@ -443,7 +476,7 @@ router.put("/:id", requireAdmin, (req, res) => {
               const normalizeValue = (value, field) => {
                 if (value === null || value === undefined) return null;
                 // Normalize date fields to YYYY-MM-DD format for comparison
-                if (field === "tanggal") {
+                if (field === "tanggal" || field === "tanggal_perbaikan") {
                   const d = new Date(value);
                   if (!isNaN(d.getTime())) {
                     return d.toISOString().split("T")[0];
@@ -457,23 +490,27 @@ router.put("/:id", requireAdmin, (req, res) => {
               const updated = rows3[0];
               const fields = [
                 "AsetId",
-                "tanggal",
+                "tanggal_perbaikan",
                 "PurchaseOrder",
                 "vendor",
                 "bagian",
-                "nominal",
+                "biaya",
               ];
 
               fields.forEach((field) => {
                 if (data[field] !== undefined) {
-                  const normalizedCurrent = normalizeValue(
-                    current[field],
-                    field
-                  );
-                  const normalizedUpdated = normalizeValue(
-                    updated[field],
-                    field
-                  );
+                  let valCurrent = current[field];
+                  let valUpdated = updated[field];
+                  if (field === "biaya") {
+                    valCurrent = normalizeBiaya(valCurrent);
+                    valUpdated = normalizeBiaya(valUpdated);
+                  } else if (field === "tanggal_perbaikan") {
+                    // map alias 'tanggal' to 'tanggal_perbaikan' when comparing
+                    // normalizeValue will format dates
+                  }
+
+                  const normalizedCurrent = normalizeValue(valCurrent, field);
+                  const normalizedUpdated = normalizeValue(valUpdated, field);
 
                   if (normalizedCurrent !== normalizedUpdated) {
                     perubahan[field] = {

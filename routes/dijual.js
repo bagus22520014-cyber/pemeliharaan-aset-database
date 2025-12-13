@@ -214,8 +214,8 @@ router.post("/", requireUserOrAdmin, (req, res) => {
 
         const dijualId = result.insertId;
 
-        // Update StatusAset to 'dijual' only when created as 'disetujui' (admin-created)
-        if (approvalStatus === "disetujui") {
+        // Update StatusAset to 'dijual' when created (both 'diajukan' and 'disetujui')
+        if (approvalStatus === "diajukan" || approvalStatus === "disetujui") {
           db.query(
             "UPDATE aset SET StatusAset = 'dijual' WHERE AsetId = ?",
             [data.AsetId],
@@ -229,6 +229,26 @@ router.post("/", requireUserOrAdmin, (req, res) => {
               }
             }
           );
+
+          // If the record is auto-approved (admin create), also set the asset value to zero
+          if (approvalStatus === "disetujui") {
+            db.query(
+              "UPDATE aset SET NilaiAset = 0 WHERE AsetId = ?",
+              [data.AsetId],
+              (errZero) => {
+                if (errZero) {
+                  console.error(
+                    `[dijual] Error setting NilaiAset=0 for AsetId=${data.AsetId}:`,
+                    errZero
+                  );
+                } else {
+                  console.log(
+                    `[dijual] Set NilaiAset=0 for AsetId=${data.AsetId} (auto-approved create)`
+                  );
+                }
+              }
+            );
+          }
         }
 
         db.query(

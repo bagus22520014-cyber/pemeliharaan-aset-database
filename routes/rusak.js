@@ -205,8 +205,8 @@ router.post("/", requireUserOrAdmin, (req, res) => {
 
         const rusakId = result.insertId;
 
-        // Update StatusAset to 'rusak' only when created as 'disetujui' (admin-created)
-        if (approvalStatus === "disetujui") {
+        // Update StatusAset to 'rusak' when created (both 'diajukan' and 'disetujui')
+        if (approvalStatus === "diajukan" || approvalStatus === "disetujui") {
           db.query(
             "UPDATE aset SET StatusAset = 'rusak' WHERE AsetId = ?",
             [data.AsetId],

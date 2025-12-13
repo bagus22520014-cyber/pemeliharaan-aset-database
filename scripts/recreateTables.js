@@ -63,7 +63,7 @@ CREATE TABLE perbaikan (
   aset_id INT NOT NULL,
   tanggal_perbaikan DATE NOT NULL,
   deskripsi TEXT,
-  biaya DECIMAL(15,2),
+  biaya INT DEFAULT 0,
   teknisi VARCHAR(255),
   status ENUM('pending','selesai','batal') DEFAULT 'pending',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

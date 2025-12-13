@@ -214,8 +214,8 @@ router.post("/", requireUserOrAdmin, (req, res) => {
 
         const dipinjamId = result.insertId;
 
-        // Update StatusAset to 'dipinjam' only when created as 'disetujui' (admin-created)
-        if (approvalStatus === "disetujui") {
+        // Update StatusAset to 'dipinjam' when created (both 'diajukan' and 'disetujui')
+        if (approvalStatus === "diajukan" || approvalStatus === "disetujui") {
           db.query(
             "UPDATE aset SET StatusAset = 'dipinjam' WHERE AsetId = ?",
             [data.AsetId],

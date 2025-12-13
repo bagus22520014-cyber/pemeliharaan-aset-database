@@ -46,6 +46,70 @@ Setiap tabel sekarang memiliki:
 
 ---
 
+## Perubahan: Perilaku `StatusAset` (create & approval)
+
+Ringkasan perubahan implementasi mengenai kapan dan bagaimana `StatusAset` pada tabel `aset` diubah:
+
+- Saat pembuatan transaksi (`perbaikan`, `rusak`, `dipinjam`, `dijual`):
+
+  - `perbaikan`:
+    - Jika dibuat oleh user (status `diajukan`), server akan langsung mengubah `aset.StatusAset` menjadi `diperbaiki` (menandakan sedang menunggu perbaikan).
+    - Jika dibuat oleh admin (status `disetujui`), server akan set `aset.StatusAset` menjadi `aktif`.
+  - `rusak`: ketika record dibuat (baik `diajukan` atau `disetujui`) server set `aset.StatusAset = 'rusak'`.
+  - `dipinjam`: ketika record dibuat (baik `diajukan` atau `disetujui`) server set `aset.StatusAset = 'dipinjam'`.
+  - `dijual`: ketika record dibuat (baik `diajukan` atau `disetujui`) server set `aset.StatusAset = 'dijual'`.
+
+- Saat admin menekan `approve` (endpoint `POST /approval/:tabelRef/:recordId/approve`):
+  - Mapping saat approve:
+    - `perbaikan` → `aset.StatusAset = 'aktif'` (perubahan khusus: perbaikan disetujui mengembalikan aset ke `aktif`).
+    - `rusak` → `aset.StatusAset = 'rusak'`
+    - `dipinjam` → `aset.StatusAset = 'dipinjam'`
+    - `dijual` → `aset.StatusAset = 'dijual'`
+  - `reject` tidak mengubah `StatusAset`.
+
+Catatan penting:
+
+- Repo sebelumnya menyarankan (lihat panduan lama) agar perubahan `StatusAset` hanya dilakukan dari flow approval. Anda memilih agar create-handlers juga mengubah `StatusAset` — ini memungkinkan UI/operasional melihat perubahan status lebih cepat, tapi bisa menyebabkan transient states jika submitter membatalkan sebelum approval. Jika Anda ingin kembali ke pola 'approval-only', beri tahu saya dan saya akan pindahkan semua update `StatusAset` ke `routes/approval.js` saja.
+
+Langkah verifikasi singkat (backup DB sebelum mencoba di lingkungan produksi):
+
+1. Jalankan server:
+
+```bash
+node index.js
+```
+
+2. Buat pengajuan perbaikan sebagai user (contoh):
+
+```bash
+curl -X POST http://localhost:4000/perbaikan \
+  -H "Content-Type: application/json" \
+  -H "x-role: user" \
+  -H "x-username: user1" \
+  -H "x-beban: SRG-NET" \
+  -d '{"AsetId":"0008/SRG-NET/2019","tanggal_perbaikan":"2025-12-12","deskripsi":"Test","biaya":100000}'
+```
+
+3. Periksa status aset (admin):
+
+```bash
+curl -H "x-role: admin" -H "x-username: admin" http://localhost:4000/aset | jq '.[] | select(.AsetId=="0008/SRG-NET/2019")'
+```
+
+4. Approve pengajuan (admin):
+
+```bash
+curl -X POST http://localhost:4000/approval/perbaikan/<recordId>/approve \
+  -H "x-role: admin" -H "x-username: admin" \
+  -H "Content-Type: application/json" -d '{}'
+```
+
+5. Periksa kembali `StatusAset` seperti langkah (3) — untuk `perbaikan` seharusnya kembali `aktif` setelah approve.
+
+Jika Anda ingin saya menambahkan langkah test otomatis (script) atau memperbarui dokumentasi lain (`PANDUAN-API.md`) untuk menampilkan contoh ini, saya bisa tambahkan sekarang.
+
+---
+
 ## Endpoint Baru
 
 ### 1. GET `/approval/pending`
