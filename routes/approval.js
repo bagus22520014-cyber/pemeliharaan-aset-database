@@ -411,9 +411,11 @@ router.post("/:tabelRef/:recordId/:action", requireAdmin, (req, res) => {
             );
 
             // Notify submitter (include approver id/username/role)
-            if (submitterId) {
+            // If initial riwayat lookup didn't return a submitter, try a fallback
+            const notifySubmitter = (uid) => {
+              if (!uid) return;
               notifySubmitterOfDecision(
-                submitterId,
+                uid,
                 beban,
                 status,
                 tabelRef,
@@ -423,6 +425,35 @@ router.post("/:tabelRef/:recordId/:action", requireAdmin, (req, res) => {
                 adminUser.id,
                 username,
                 adminUser.role
+              );
+            };
+
+            if (submitterId) {
+              notifySubmitter(submitterId);
+            } else {
+              const qFindSubmitter = `SELECT user_id FROM riwayat WHERE tabel_ref = ? AND record_id = ? ORDER BY created_at DESC LIMIT 1`;
+              db.query(
+                qFindSubmitter,
+                [tabelRef, recordId],
+                (errFindSub, findSubRows) => {
+                  if (errFindSub) {
+                    console.error(
+                      `[approval] Error finding submitter riwayat for ${tabelRef}#${recordId}:`,
+                      errFindSub
+                    );
+                  }
+                  const fallbackUid =
+                    findSubRows && findSubRows.length > 0
+                      ? findSubRows[0].user_id
+                      : null;
+                  if (fallbackUid) {
+                    notifySubmitter(fallbackUid);
+                  } else {
+                    console.log(
+                      `[approval] No submitter found to notify for ${tabelRef}#${recordId}`
+                    );
+                  }
+                }
               );
             }
 

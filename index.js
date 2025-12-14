@@ -16,6 +16,7 @@ import mutasiRouter from "./routes/mutasi.js";
 import bebanRouter from "./routes/beban.js";
 import departemenRouter from "./routes/departemen.js";
 import approvalRouter from "./routes/approval.js";
+import debugRouter from "./routes/debug.js";
 
 const app = express();
 app.use(express.json());
@@ -47,6 +48,7 @@ app.use("/mutasi", mutasiRouter);
 app.use("/beban", bebanRouter);
 app.use("/departemen", departemenRouter);
 app.use("/approval", approvalRouter);
+app.use("/debug", debugRouter);
 
 function printRoutes(app) {
   try {
