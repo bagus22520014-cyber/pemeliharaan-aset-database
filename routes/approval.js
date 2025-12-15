@@ -628,6 +628,49 @@ router.post("/:tabelRef/:recordId/:action", requireAdmin, (req, res) => {
               }
             }
 
+            // If rejected, revert asset StatusAset for certain transaction types
+            if (status === "ditolak") {
+              // When a dijual is rejected, the asset should not remain in 'dijual' status
+              if (tabelRef === "dijual") {
+                db.query(
+                  "UPDATE aset SET StatusAset = 'aktif' WHERE id = ?",
+                  [asetDbId],
+                  (errRevert) => {
+                    if (errRevert) {
+                      console.error(
+                        `[approval] Error reverting StatusAset for aset#${asetDbId} after ${tabelRef}#${recordId} rejection:`,
+                        errRevert
+                      );
+                    } else {
+                      console.log(
+                        `[approval] Reverted aset#${asetDbId} StatusAset='aktif' after ${tabelRef}#${recordId} rejection`
+                      );
+                    }
+                  }
+                );
+              }
+
+              // When a dipinjam is rejected, revert asset StatusAset back to 'aktif'
+              if (tabelRef === "dipinjam") {
+                db.query(
+                  "UPDATE aset SET StatusAset = 'aktif' WHERE id = ?",
+                  [asetDbId],
+                  (errRevert2) => {
+                    if (errRevert2) {
+                      console.error(
+                        `[approval] Error reverting StatusAset for aset#${asetDbId} after ${tabelRef}#${recordId} rejection:`,
+                        errRevert2
+                      );
+                    } else {
+                      console.log(
+                        `[approval] Reverted aset#${asetDbId} StatusAset='aktif' after ${tabelRef}#${recordId} rejection (dipinjam)`
+                      );
+                    }
+                  }
+                );
+              }
+            }
+
             res.json({
               message: `Pengajuan ${tabelRef} berhasil ${status}`,
               tabel_ref: tabelRef,
