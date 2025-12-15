@@ -17,6 +17,7 @@ import bebanRouter from "./routes/beban.js";
 import departemenRouter from "./routes/departemen.js";
 import approvalRouter from "./routes/approval.js";
 import debugRouter from "./routes/debug.js";
+import asetCopyRouter from "./routes/aset_copy.js";
 
 const app = express();
 app.use(express.json());
@@ -49,6 +50,7 @@ app.use("/beban", bebanRouter);
 app.use("/departemen", departemenRouter);
 app.use("/approval", approvalRouter);
 app.use("/debug", debugRouter);
+app.use("/aset_copy", asetCopyRouter);
 
 function printRoutes(app) {
   try {
@@ -105,6 +107,7 @@ printRouterDetails("/perbaikan", perbaikanRouter);
 printRouterDetails("/user", userRouter);
 printRouterDetails("/riwayat", riwayatRouter);
 printRouterDetails("/notification", notificationRouter);
+printRouterDetails("/aset_copy", asetCopyRouter);
 
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err?.stack ?? err);

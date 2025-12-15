@@ -302,6 +302,26 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
     }
     console.log(`[aset] insertId: ${result.insertId}`);
 
+    // Create a readonly copy in aset_copy for auditing/archive purposes.
+    // Non-blocking: log errors but do not fail the main request if copy fails.
+    try {
+      db.query(
+        "INSERT INTO aset_copy SELECT * FROM aset WHERE id = ?",
+        [result.insertId],
+        (errCopy) => {
+          if (errCopy) {
+            console.error("[aset_copy] Failed to copy aset row:", errCopy);
+          } else {
+            console.log(
+              `[aset_copy] Copied aset id=${result.insertId} into aset_copy`
+            );
+          }
+        }
+      );
+    } catch (e) {
+      console.error("[aset_copy] Unexpected error while copying aset:", e);
+    }
+
     // Log to riwayat (input)
     const username =
       req.cookies?.username || req.headers["x-username"] || "unknown";
