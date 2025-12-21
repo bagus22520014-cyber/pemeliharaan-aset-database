@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 dotenv.config();
 import express from "express";
 import cookieParser from "cookie-parser";
+import cors from "cors";
 import fs from "fs";
 import path from "path";
 import asetRouter from "./routes/aset.js";
@@ -22,6 +23,8 @@ import asetCopyRouter from "./routes/aset_copy.js";
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
+// allow cross-origin requests from other devices on the same network
+app.use(cors());
 // ensure assets/imgs dir exists and serve static
 const imgsDir = path.join(process.cwd(), "assets", "imgs");
 if (!fs.existsSync(imgsDir)) fs.mkdirSync(imgsDir, { recursive: true });
@@ -118,8 +121,9 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const port = process.env.PORT ?? 4000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+const host = process.env.HOST ?? "0.0.0.0";
+app.listen(port, host, () => {
+  console.log(`Server running on ${host}:${port}`);
 });
 
 export default app;
