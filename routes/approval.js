@@ -628,6 +628,137 @@ router.post("/:tabelRef/:recordId/:action", requireAdmin, (req, res) => {
               }
             }
 
+            // If this is a perbaikan approval, and the perbaikan references a schedule,
+            // attempt to complete that schedule so the next schedule is generated.
+            if (tabelRef === "perbaikan" && status === "disetujui") {
+              (async () => {
+                try {
+                  const [prow] = await db
+                    .promise()
+                    .query("SELECT * FROM perbaikan WHERE id = ? LIMIT 1", [
+                      recordId,
+                    ]);
+                  console.log(
+                    `[approval] perbaikan#${recordId} approved, checking schedule auto-complete`
+                  );
+                  if (!prow || prow.length === 0) return;
+                  const p = prow[0];
+                  const scheduleId =
+                    p.schedule_id || p.maintenance_schedule_id || null;
+                  console.log(
+                    `[approval] perbaikan#${recordId} references schedule_id=${scheduleId}`
+                  );
+                  if (!scheduleId) return;
+
+                  // Perform the same completion steps as /maintenance/:id/complete
+                  const conn = await db.promise().getConnection();
+                  try {
+                    await conn.beginTransaction();
+
+                    // Lock schedule
+                    const [srows0] = await conn.query(
+                      "SELECT * FROM maintenance_schedules WHERE id = ? FOR UPDATE",
+                      [scheduleId]
+                    );
+                    if (!srows0 || srows0.length === 0) {
+                      await conn.rollback();
+                      return;
+                    }
+                    const sched0 = srows0[0];
+
+                    if (sched0.status === "completed") {
+                      await conn.rollback();
+                      return;
+                    }
+
+                    const performedAt = new Date();
+
+                    // Insert maintenance_log (avoid duplicates by simple insert)
+                    const [exist] = await conn.query(
+                      "SELECT id FROM maintenance_logs WHERE schedule_id = ? LIMIT 1",
+                      [scheduleId]
+                    );
+                    let logId = null;
+                    if (exist && exist.length > 0) {
+                      logId = exist[0].id;
+                    } else {
+                      const [r] = await conn.execute(
+                        `INSERT INTO maintenance_logs (schedule_id, asset_id, performed_by, performed_at, description, cost, notes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                        [
+                          scheduleId,
+                          sched0.asset_id,
+                          adminUser.id || null,
+                          performedAt,
+                          `Auto-complete via perbaikan approval #${recordId}`,
+                          null,
+                          JSON.stringify({ perbaikan: recordId }),
+                        ]
+                      );
+                      logId = r.insertId;
+                    }
+
+                    await conn.execute(
+                      "UPDATE maintenance_schedules SET status = 'completed', completed_at = NOW() WHERE id = ?",
+                      [scheduleId]
+                    );
+                    console.log(
+                      `[approval] Marked schedule#${scheduleId} completed for perbaikan#${recordId}`
+                    );
+
+                    // compute next due and insert
+                    const [r1] = await conn.query(
+                      "SELECT * FROM maintenance_rules WHERE id = ?",
+                      [sched0.rule_id]
+                    );
+                    if (r1 && r1.length > 0) {
+                      const rule = r1[0];
+                      const baseDate =
+                        rule.anchor_type === "sliding"
+                          ? new Date(performedAt)
+                          : new Date(sched0.due_date);
+                      const iv = rule.interval_value || 1;
+                      const iu = rule.interval_unit || "day";
+                      const d = new Date(baseDate);
+                      if (iu === "day") d.setDate(d.getDate() + iv);
+                      else if (iu === "week") d.setDate(d.getDate() + iv * 7);
+                      else if (iu === "month") d.setMonth(d.getMonth() + iv);
+                      else if (iu === "year")
+                        d.setFullYear(d.getFullYear() + iv);
+                      const nextDue = d.toISOString().split("T")[0];
+
+                      const [ins] = await conn.execute(
+                        `INSERT IGNORE INTO maintenance_schedules (rule_id, asset_id, due_date, meta) VALUES (?, ?, ?, ?)`,
+                        [
+                          sched0.rule_id,
+                          sched0.asset_id,
+                          nextDue,
+                          JSON.stringify({ generated_from: scheduleId }),
+                        ]
+                      );
+                      console.log(
+                        `[approval] Attempted insert next schedule for rule ${sched0.rule_id} due ${nextDue}, affectedRows=${ins.affectedRows}`
+                      );
+                    }
+
+                    await conn.commit();
+                  } catch (e) {
+                    await conn.rollback();
+                    console.error(
+                      `[approval] Error auto-completing schedule ${scheduleId} for perbaikan#${recordId}:`,
+                      e
+                    );
+                  } finally {
+                    conn.release();
+                  }
+                } catch (e) {
+                  console.error(
+                    `[approval] Error preparing schedule auto-complete for perbaikan#${recordId}:`,
+                    e
+                  );
+                }
+              })();
+            }
+
             // If rejected, revert asset StatusAset for certain transaction types
             if (status === "ditolak") {
               // When a dijual is rejected, the asset should not remain in 'dijual' status

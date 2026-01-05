@@ -1,0 +1,44 @@
+[dotenv@17.2.3] injecting env (5) from .env -- tip: 🔄 add secrets lifecycle management: https://dotenvx.com/ops
+[db] pool configured host=localhost db=pemeliharaan-aset connLimit=15 queueLimit=0
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+Routes under /aset:
+GET /aset/
+POST /aset/
+GET /aset/:id
+PUT /aset/:id
+DELETE /aset/:id
+PUT /aset/:id/gambar
+PUT /aset/:id/keterangan
+Routes under /perbaikan:
+GET /perbaikan/
+GET /perbaikan/aset/:asetId
+GET /perbaikan/:id
+POST /perbaikan/
+PUT /perbaikan/:id
+DELETE /perbaikan/:id
+Routes under /user:
+POST /user/login
+POST /user/
+GET /user/
+GET /user/all
+POST /user/create
+PUT /user/:username/password
+PUT /user/:username/beban
+Routes under /riwayat:
+GET /riwayat/
+GET /riwayat/aset/:asetId
+GET /riwayat/user/:username
+Routes under /notification:
+GET /notification/
+GET /notification/unread-count
+PUT /notification/:id/read
+PUT /notification/read-all
+GET /notification/logs
+POST /notification/logs/:id/read
+GET /notification/stream
+DELETE /notification/:id
+Routes under /aset_copy:
+GET /aset_copy/
+GET /aset_copy/:id
+Server running on 0.0.0.0:4000
+[app] POST /maintenance/rules - x-role=admin

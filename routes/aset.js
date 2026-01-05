@@ -178,6 +178,62 @@ router.use((req, res, next) => {
   next();
 });
 
+/**
+ * GET /aset/stats/kategori
+ * Get statistics: count of assets per kategori (Grup)
+ */
+router.get("/stats/kategori", requireUserOrAdmin, (req, res) => {
+  const query = `
+    SELECT 
+      COALESCE(Grup, 'Tidak Ada Kategori') as kategori,
+      COUNT(*) as jumlah_aset,
+      COALESCE(SUM(NilaiAset), 0) as total_nilai
+    FROM aset
+    GROUP BY Grup
+    ORDER BY Grup ASC
+  `;
+
+  db.query(query, (err, rows) => {
+    if (err) return res.status(500).json(err);
+
+    const stats = rows.map((row) => ({
+      kategori: row.kategori,
+      jumlah_aset: parseInt(row.jumlah_aset) || 0,
+      total_nilai: parseFloat(row.total_nilai) || 0,
+    }));
+
+    res.json(stats);
+  });
+});
+
+/**
+ * GET /aset/stats/status
+ * Get statistics: count of assets per status
+ */
+router.get("/stats/status", requireUserOrAdmin, (req, res) => {
+  const query = `
+    SELECT 
+      COALESCE(StatusAset, 'Tidak Ada Status') as status,
+      COUNT(*) as jumlah_aset,
+      COALESCE(SUM(NilaiAset), 0) as total_nilai
+    FROM aset
+    GROUP BY StatusAset
+    ORDER BY StatusAset ASC
+  `;
+
+  db.query(query, (err, rows) => {
+    if (err) return res.status(500).json(err);
+
+    const stats = rows.map((row) => ({
+      status: row.status,
+      jumlah_aset: parseInt(row.jumlah_aset) || 0,
+      total_nilai: parseFloat(row.total_nilai) || 0,
+    }));
+
+    res.json(stats);
+  });
+});
+
 router.get("/", requireUserOrAdmin, (req, res) => {
   const role = getRoleFromRequest(req);
   if (role === "admin") {
@@ -460,6 +516,8 @@ router.post("/", requireUserOrAdmin, upload.single("Gambar"), (req, res) => {
 
 router.get("/:id", requireUserOrAdmin, (req, res) => {
   const { id } = req.params;
+  // Support lookup by external AsetId (string) OR numeric DB id
+  const numericId = Number(id);
   const q = `
     SELECT a.*, 
       b.id as beban_id, b.kode as beban_kode, b.aktif as beban_aktif,
@@ -467,9 +525,10 @@ router.get("/:id", requireUserOrAdmin, (req, res) => {
     FROM aset a
     LEFT JOIN beban b ON a.beban_id = b.id
     LEFT JOIN departemen d ON a.departemen_id = d.id
-    WHERE a.AsetId = ?
+    WHERE a.AsetId = ? OR a.id = ?
   `;
-  db.query(q, [id], (err, result) => {
+  const params = Number.isFinite(numericId) ? [id, numericId] : [id, null];
+  db.query(q, params, (err, result) => {
     if (err) return res.status(500).json(err);
     if (!result || result.length === 0)
       return res.status(404).json({ message: "Aset tidak ditemukan" });

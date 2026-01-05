@@ -101,6 +101,7 @@ function mapRow(r) {
   };
 
   return {
+    schedule_id: r.schedule_id ?? r.scheduleId ?? null,
     id: r.id ?? null,
     aset_id: r.aset_id ?? null,
     AsetId: r.AsetId ?? null,
@@ -314,9 +315,11 @@ router.post("/", requireUserOrAdmin, (req, res) => {
     const insertPerbaikan = () => {
       const approvalStatus = getApprovalStatus(role);
 
-      const q = `INSERT INTO perbaikan (aset_id, tanggal_perbaikan, deskripsi, biaya, teknisi, PurchaseOrder, approval_status, approval_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+      // Include schedule_id if provided so approvals can auto-complete schedules
+      const q = `INSERT INTO perbaikan (aset_id, schedule_id, tanggal_perbaikan, deskripsi, biaya, teknisi, PurchaseOrder, approval_status, approval_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
       const vals = [
         asetDbId,
+        data.schedule_id ?? data.scheduleId ?? null,
         data.tanggal_perbaikan || data.tanggal,
         data.deskripsi ?? null,
         normalizeBiaya(data.biaya ?? data.nominal ?? null),

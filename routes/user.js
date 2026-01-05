@@ -112,6 +112,17 @@ router.get("/all", requireAdmin, (req, res) => {
 router.post("/create", requireAdmin, (req, res) => {
   const { username, password, nama, beban, role } = req.body;
 
+  // Debug logging for incoming create requests
+  try {
+    console.log("[user.create] incoming request headers:", {
+      x_role: req.headers["x-role"] || req.headers["role"],
+      x_username: req.headers["x-username"] || null,
+    });
+    console.log("[user.create] body:", req.body);
+  } catch (e) {
+    /* ignore logging errors */
+  }
+
   // Validate required fields
   if (!username || !password) {
     return res
@@ -158,13 +169,67 @@ router.post("/create", requireAdmin, (req, res) => {
         return res.status(500).json(err);
       }
 
-      res.status(201).json({
-        message: "User berhasil dibuat",
-        id: result.insertId,
-        username,
-        nama: userName,
-        role: userRole,
-        beban: bebanArray,
+      const userId = result.insertId;
+
+      // sync beban_users mapping for maintenance notifications
+      if (!bebanArray || bebanArray.length === 0) {
+        return res.status(201).json({
+          message: "User berhasil dibuat",
+          id: userId,
+          username,
+          nama: userName,
+          role: userRole,
+          beban: bebanArray,
+        });
+      }
+
+      const placeholders = bebanArray.map(() => "?").join(",");
+      const qBeban = `SELECT id, kode FROM beban WHERE kode IN (${placeholders})`;
+      db.query(qBeban, bebanArray, (errB, bebanRows) => {
+        if (errB) {
+          console.error(
+            "[user] Failed to resolve beban codes on create:",
+            errB
+          );
+          return res.status(201).json({
+            message: "User berhasil dibuat",
+            id: userId,
+            username,
+            nama: userName,
+            role: userRole,
+            beban: bebanArray,
+          });
+        }
+
+        if (!bebanRows || bebanRows.length === 0) {
+          return res.status(201).json({
+            message: "User berhasil dibuat",
+            id: userId,
+            username,
+            nama: userName,
+            role: userRole,
+            beban: bebanArray,
+          });
+        }
+
+        const inserts = bebanRows.map((b) => [b.id, userId]);
+        const insQ =
+          "INSERT IGNORE INTO beban_users (beban_id, user_id) VALUES ?";
+        db.query(insQ, [inserts], (insErr) => {
+          if (insErr)
+            console.error(
+              "[user] Failed to insert beban_users on create:",
+              insErr
+            );
+          return res.status(201).json({
+            message: "User berhasil dibuat",
+            id: userId,
+            username,
+            nama: userName,
+            role: userRole,
+            beban: bebanArray,
+          });
+        });
       });
     }
   );
@@ -234,6 +299,18 @@ router.put("/:username/beban", requireAdmin, (req, res) => {
   const targetUsername = req.params.username;
   const { beban } = req.body || {};
 
+  // Debug logging for incoming beban update requests
+  try {
+    console.log("[user.beban.update] targetUsername:", targetUsername);
+    console.log("[user.beban.update] incoming headers:", {
+      x_role: req.headers["x-role"] || req.headers["role"],
+      x_username: req.headers["x-username"] || null,
+    });
+    console.log("[user.beban.update] body:", req.body);
+  } catch (e) {
+    /* ignore logging errors */
+  }
+
   if (!beban) {
     return res.status(400).json({ message: "field beban diperlukan" });
   }
@@ -270,11 +347,96 @@ router.put("/:username/beban", requireAdmin, (req, res) => {
     if (err) return res.status(500).json(err);
     if (result.affectedRows === 0)
       return res.status(404).json({ message: "User tidak ditemukan" });
-    return res.json({
-      message: "Beban user diperbarui",
-      username: targetUsername,
-      beban: bebanArray,
-    });
+    // Also synchronize beban_users mapping so maintenance notifications work
+    // Find user id first
+    db.query(
+      "SELECT id FROM user WHERE username = ? LIMIT 1",
+      [targetUsername],
+      (err2, rows2) => {
+        if (err2) {
+          console.error(
+            "[user] Failed to lookup user id for beban_users sync:",
+            err2
+          );
+          return res.json({
+            message: "Beban user diperbarui",
+            username: targetUsername,
+            beban: bebanArray,
+          });
+        }
+        if (!rows2 || rows2.length === 0) {
+          return res.json({
+            message: "Beban user diperbarui",
+            username: targetUsername,
+            beban: bebanArray,
+          });
+        }
+        const userId = rows2[0].id;
+
+        // Resolve beban codes to beban ids
+        if (!bebanArray || bebanArray.length === 0) {
+          // remove any existing mappings for this user
+          db.query(
+            "DELETE FROM beban_users WHERE user_id = ?",
+            [userId],
+            (dErr) => {
+              if (dErr)
+                console.error("[user] Failed to clear beban_users:", dErr);
+              return res.json({
+                message: "Beban user diperbarui",
+                username: targetUsername,
+                beban: bebanArray,
+              });
+            }
+          );
+          return;
+        }
+
+        const placeholders = bebanArray.map(() => "?").join(",");
+        const qBeban = `SELECT id, kode FROM beban WHERE kode IN (${placeholders})`;
+        db.query(qBeban, bebanArray, (errB, bebanRows) => {
+          if (errB) {
+            console.error("[user] Failed to resolve beban codes:", errB);
+            return res.json({
+              message: "Beban user diperbarui",
+              username: targetUsername,
+              beban: bebanArray,
+            });
+          }
+
+          // Delete any existing mappings for this user, then insert new ones
+          db.query(
+            "DELETE FROM beban_users WHERE user_id = ?",
+            [userId],
+            (dErr) => {
+              if (dErr)
+                console.error("[user] Failed to clear beban_users:", dErr);
+
+              if (!bebanRows || bebanRows.length === 0) {
+                return res.json({
+                  message: "Beban user diperbarui",
+                  username: targetUsername,
+                  beban: bebanArray,
+                });
+              }
+
+              const inserts = bebanRows.map((b) => [b.id, userId]);
+              const insQ =
+                "INSERT IGNORE INTO beban_users (beban_id, user_id) VALUES ?";
+              db.query(insQ, [inserts], (insErr) => {
+                if (insErr)
+                  console.error("[user] Failed to insert beban_users:", insErr);
+                return res.json({
+                  message: "Beban user diperbarui",
+                  username: targetUsername,
+                  beban: bebanArray,
+                });
+              });
+            }
+          );
+        });
+      }
+    );
   });
 });
 

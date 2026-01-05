@@ -3,6 +3,11 @@ export function getRoleFromRequest(req) {
   if (headerRaw && headerRaw.toString().trim() !== "") {
     return headerRaw.toString().trim().toLowerCase();
   }
+  // Fallback to query param for EventSource (SSE) where headers cannot be set
+  const queryRole =
+    (req.query && (req.query["x-role"] || req.query.role)) || "";
+  if (queryRole && queryRole.toString().trim() !== "")
+    return queryRole.toString().trim().toLowerCase();
   const cookieRole = (req.cookies && req.cookies.role) || "";
   return (cookieRole || "").toString().trim().toLowerCase();
 }

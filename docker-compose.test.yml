@@ -1,0 +1,34 @@
+version: "3.8"
+services:
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: pemeliharaan_test
+      MYSQL_USER: test
+      MYSQL_PASSWORD: test
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+  # Optional: a convenient test runner / app service that can be used to run
+  # migrations or execute tests inside the compose network. It's not required
+  # for local test execution but can be useful in CI when using compose.
+  app:
+    image: node:18-alpine
+    working_dir: /usr/src/app
+    volumes:
+      - ./:/usr/src/app:cached
+    command: ["/bin/sh", "-c", "npm ci && npm test"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: test
+      DB_PASS: test
+      DB_NAME: pemeliharaan_test

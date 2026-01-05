@@ -1,0 +1,294 @@
+openapi: 3.0.3
+info:
+  title: Pemeliharaan Aset API
+  version: 1.0.0
+  description: Partial OpenAPI spec for maintenance endpoints used by frontend client generation.
+servers:
+  - url: http://localhost:4000
+
+paths:
+  /maintenance/rules:
+    post:
+      summary: Create maintenance rule
+      tags: [maintenance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [asset_id, title, interval_value, interval_unit, start_date]
+              properties:
+                asset_id:
+                  type: integer
+                title:
+                  type: string
+                description:
+                  type: string
+                interval_value:
+                  type: integer
+                interval_unit:
+                  type: string
+                  enum: [day, week, month, year]
+                start_date:
+                  type: string
+                  format: date
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  rule:
+                    type: object
+        '400':
+          description: Bad Request (validation)
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal Server Error
+
+  /maintenance/schedules:
+    get:
+      summary: List schedules
+      tags: [maintenance]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+        '403':
+          description: Forbidden
+
+  /maintenance/schedules/{id}:
+    get:
+      summary: Get schedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+        '404':
+          description: Not found
+
+  /maintenance/{id}/claim:
+    post:
+      summary: Claim schedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Claimed
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+        '409':
+          description: Already claimed or conflict
+
+  /maintenance/{id}/complete:
+    post:
+      summary: Complete schedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                performed_at:
+                  type: string
+                  format: date
+                description:
+                  type: string
+                cost:
+                  type: number
+      responses:
+        '200':
+          description: Completed
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+
+components:
+  schemas: {}
+openapi: 3.0.3
+info:
+  title: Pemeliharaan Aset API
+  version: 1.0.0
+  description: API for maintenance scheduling, notifications, claim and complete flows.
+servers:
+  - url: http://localhost:4000
+paths:
+  /maintenance/rules:
+    post:
+      summary: Create maintenance rule
+      tags: [maintenance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaintenanceRuleInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceRule'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /maintenance/schedules:
+    get:
+      summary: List schedules
+      tags: [maintenance]
+      parameters:
+        - in: query
+          name: asset_id
+          schema:
+            type: integer
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /maintenance/schedules/{id}/claim:
+    post:
+      summary: Claim a schedule
+      tags: [maintenance]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Claimed
+        '409':
+          description: Conflict — already claimed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /maintenance/schedules/{id}/complete:
+    post:
+      summary: Complete a claimed schedule
+      tags: [maintenance]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                performed_at:
+                  type: string
+                cost:
+                  type: number
+      responses:
+        '200':
+          description: Completed
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Conflict
+
+components:
+  schemas:
+    MaintenanceRuleInput:
+      type: object
+      required: [asset_id, title, interval_value, interval_unit, start_date]
+      properties:
+        asset_id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        interval_value:
+          type: integer
+        interval_unit:
+          type: string
+          enum: [day, week, month, year]
+        start_date:
+          type: string
+          format: date
+    MaintenanceRule:
+      type: object
+      properties:
+        id:
+          type: integer
+        asset_id:
+          type: integer
+        title:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Unauthorized
+    Forbidden:
+      description: Forbidden
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-username

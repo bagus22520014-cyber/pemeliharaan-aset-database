@@ -30,9 +30,6 @@ curl.exe http://localhost:4000/aset \
   -H "x-role: admin"
 
 # User - see only assets in their beban
-curl.exe http://localhost:4000/aset \
-  -H "x-role: user" \
-  -H "x-beban: MLM"
 ```
 
 ### 2. Get Asset by AsetId
@@ -183,6 +180,137 @@ curl.exe -X DELETE http://localhost:4000/perbaikan/1 \
 ```
 
 ---
+
+## 🛠️ MAINTENANCE (SCHEDULING) ENDPOINTS
+
+> Note: routes implemented under `/maintenance`. Background scripts generate schedules and notifications.
+
+### 1. Claim a Schedule
+
+Only one user may claim a schedule (atomic). If another user already claimed, server returns `409`.
+
+```bash
+curl.exe -X POST http://localhost:4000/maintenance/123/claim \
+  -H "x-role: user" \
+  -H "x-username: alice" \
+  -b cookies.txt
+```
+
+Success response:
+
+```json
+{ "message": "Claimed", "schedule_id": 123 }
+```
+
+Error when already claimed:
+
+```json
+{ "message": "Schedule already claimed or not pending" }
+```
+
+### 2. Complete a Schedule
+
+The claimer reports maintenance done. This will create a `maintenance_log`, mark schedule completed, stop notifications for that schedule and create the next schedule automatically.
+
+```bash
+curl.exe -X POST http://localhost:4000/maintenance/123/complete \
+  -H "Content-Type: application/json" \
+  -H "x-role: user" \
+  -H "x-username: alice" \
+  -b cookies.txt \
+  -d "{
+    \"performed_at\": \"2025-12-22T10:30:00Z\",
+    \"description\": \"Pembersihan dan pelumasan bearing\",
+    \"cost\": 150000
+  }"
+```
+
+Success response:
+
+```json
+{ "message": "Completed", "schedule_id": 123 }
+```
+
+#### Error codes (maintenance)
+
+- 400 Bad Request — input validation failed (e.g., missing fields, invalid date format)
+- 401 Unauthorized — missing or invalid authentication (no `x-username` / cookie)
+- 403 Forbidden — user not authorized (beban mismatch or role)
+- 409 Conflict — claim race: schedule already claimed or not pending
+- 500 Internal Server Error — unexpected server error
+
+Include these HTTP codes in client handling. All error responses follow:
+
+```json
+{ "message": "..." }
+```
+
+---
+
+## API Versioning & Breaking Changes
+
+- Current API version: v1 (implicit). When introducing breaking changes, follow this policy:
+  1. Add a new major version path: `/v2/...` or support `Accept-Version` or `X-API-Version` header.
+  2. Maintain `/v1/...` for at least one deployment cycle and coordinate client migration.
+  3. Document breaking changes in the `CHANGELOG.md` and communicate via team channels.
+  4. For non-breaking additive changes, prefer `PATCH` or `minor` semantic updates and document in API docs.
+
+---
+
+## Observability & Operational Notes
+
+- Audit logs: all user actions affecting data (create rule, claim, complete, delete) are recorded in `riwayat` table. Use `/riwayat` endpoints (admin) for investigations.
+- Metrics: background jobs emit structured metric logs prefixed with `[METRIC]` JSON lines. Example metric fields: `name`, `value`, `labels`, `ts`.
+- Alerts to configure:
+  - Worker failures: alert when `generateSchedules` or `sendNotifications` logs `status=failure` more than once in 24h.
+  - Notification failure spikes: many duplicate-insert exceptions or failures in `notification_logs` writes.
+  - High claim conflict rate: increases in `409` responses for `/maintenance/:id/claim`.
+
+### Audit logging examples
+
+When a user claims a schedule, the server inserts a `riwayat` row. Example `riwayat` entry (stored as JSON in DB):
+
+```json
+{
+  "jenis_aksi": "maintenance_claim",
+  "user_id": 42,
+  "role": "user",
+  "aset_id": 84,
+  "perubahan": { "schedule_id": 123 },
+  "tabel_ref": "maintenance_schedules",
+  "record_id": 123
+}
+```
+
+### Notification delivery and deduplication
+
+- `sendNotifications.js` inserts `notification_logs` and relies on a uniqueness strategy to avoid duplicate sends. Consider adding an index for `(schedule_id, user_id, type, DATE(send_date))` to dedupe per-day deliveries.
+- Frontend push options: SSE (provided at `/notification/stream`), WebSocket, or polling. Server marks `notification_logs.read_at` when user acknowledges.
+
+---
+
+## Backup & Migration Runbook
+
+See `RUNBOOK.md` in repo root for step-by-step backup/restore, migration run sequence, and alert suggestions.
+
+### 3. Background workers (run manually or via cron)
+
+Generate schedules from rules (create upcoming `maintenance_schedules`):
+
+```bash
+node scripts/generateSchedules.js
+```
+
+Send in-app notifications (populates `notification_logs` according to cadence rules):
+
+```bash
+node scripts/sendNotifications.js
+```
+
+Notes:
+
+- `sendNotifications.js` will insert `notification_logs` records for all users associated to the asset's `beban`.
+- Workers are designed to be run daily by cron (e.g., `0 5 * * * node ...`).
 
 ## 📋 RIWAYAT (AUDIT LOG) ENDPOINTS
 

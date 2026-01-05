@@ -46,18 +46,36 @@ router.get("/", requireUserOrAdmin, (req, res) => {
 });
 
 /**
- * GET /beban/:id
- * Get single beban by id
+ * GET /beban/stats/summary
+ * Get statistics: count of assets per beban
  */
-router.get("/:id", requireUserOrAdmin, (req, res) => {
-  const { id } = req.params;
+router.get("/stats/summary", requireUserOrAdmin, (req, res) => {
+  const query = `
+    SELECT 
+      b.id,
+      b.kode,
+      b.aktif,
+      COUNT(a.AsetId) as jumlah_aset,
+      COALESCE(SUM(a.NilaiAset), 0) as total_nilai
+    FROM beban b
+    LEFT JOIN aset a ON a.beban_id = b.id
+    WHERE b.aktif = 1
+    GROUP BY b.id, b.kode, b.aktif
+    ORDER BY b.kode ASC
+  `;
 
-  db.query("SELECT * FROM beban WHERE id = ?", [id], (err, rows) => {
+  db.query(query, (err, rows) => {
     if (err) return res.status(500).json(err);
-    if (!rows || rows.length === 0) {
-      return res.status(404).json({ error: "Beban not found" });
-    }
-    res.json(mapRow(rows[0]));
+
+    const summary = rows.map((row) => ({
+      id: row.id,
+      kode: row.kode,
+      aktif: row.aktif === 1 || row.aktif === true,
+      jumlah_aset: parseInt(row.jumlah_aset) || 0,
+      total_nilai: parseFloat(row.total_nilai) || 0,
+    }));
+
+    res.json(summary);
   });
 });
 
@@ -69,6 +87,22 @@ router.get("/kode/:kode", requireUserOrAdmin, (req, res) => {
   const { kode } = req.params;
 
   db.query("SELECT * FROM beban WHERE kode = ?", [kode], (err, rows) => {
+    if (err) return res.status(500).json(err);
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: "Beban not found" });
+    }
+    res.json(mapRow(rows[0]));
+  });
+});
+
+/**
+ * GET /beban/:id
+ * Get single beban by id
+ */
+router.get("/:id", requireUserOrAdmin, (req, res) => {
+  const { id } = req.params;
+
+  db.query("SELECT * FROM beban WHERE id = ?", [id], (err, rows) => {
     if (err) return res.status(500).json(err);
     if (!rows || rows.length === 0) {
       return res.status(404).json({ error: "Beban not found" });
